@@ -1,14 +1,21 @@
 # LCEServer
 
+<p align="center">
+  <img src="https://img.shields.io/github/license/veroxsity/LCEServer?style=for-the-badge" alt="License" />
+  <img src="https://img.shields.io/github/last-commit/veroxsity/LCEServer?style=for-the-badge" alt="Last Commit" />
+  <img src="https://img.shields.io/github/repo-size/veroxsity/LCEServer?style=for-the-badge" alt="Repo Size" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=c%2B%2B" alt="C++17" />
+  <img src="https://img.shields.io/badge/Build-CMake-064F8C?style=flat-square&logo=cmake" alt="CMake" />
+  <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=flat-square&logo=windows" alt="Windows" />
+  <img src="https://img.shields.io/badge/Protocol-v78%20%7C%20Net%20560-2D6A4F?style=flat-square" alt="Protocol" />
+</p>
+
 LCEServer is a standalone dedicated server for Minecraft Legacy Console Edition, written in C++17.
 
 It speaks the native LCE TCP protocol so unmodified legacy console clients can connect directly.
-
-## Related Repositories
-
-- Hub repo: https://github.com/veroxsity/MinecraftLCE
-- Client repo: https://github.com/veroxsity/LCEClient
-- Bridge repo: https://github.com/veroxsity/LCEBridge
 
 ## Status
 
@@ -63,9 +70,11 @@ Run from the repository root so `server.properties` and `worlds/` resolve correc
 .\build\Release\LCEServer.exe
 ```
 
-## Configuration
+## Related Repositories
 
-The server reads `server.properties` from the working directory. On first launch it creates the file if it does not already exist.
+- Hub repo: https://github.com/veroxsity/MinecraftLCE
+- Client repo: https://github.com/veroxsity/LCEClient
+- Bridge repo: https://github.com/veroxsity/LCEBridge
 
 ## Current Limitations
 
