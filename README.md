@@ -46,13 +46,6 @@ It speaks the native LCE TCP protocol so unmodified legacy console clients can c
 | `src/console/` | Interactive server console commands |
 | `PACKETS.md` | Packet tracker and wire format notes |
 
-## Requirements
-
-- Windows
-- CMake `3.20+`
-- A C++17-capable compiler
-- Visual Studio 2022 or Visual Studio 2022 Build Tools
-
 ## Build
 
 ```powershell
@@ -70,16 +63,15 @@ Run from the repository root so `server.properties` and `worlds/` resolve correc
 .\build\Release\LCEServer.exe
 ```
 
+## Requirements
+
+- Windows
+- CMake `3.20+`
+- A C++17-capable compiler
+- Visual Studio 2022 or Visual Studio 2022 Build Tools
+
 ## Related Repositories
 
 - Hub repo: https://github.com/veroxsity/MinecraftLCE
 - Client repo: https://github.com/veroxsity/LCEClient
 - Bridge repo: https://github.com/veroxsity/LCEBridge
-
-## Current Limitations
-
-- AddPlayer entity data crash on second player join
-- No inventory system yet
-- No plugin loading yet
-- Some console commands are scaffolding only
-- LAN advertising config exists but broadcast is not implemented
