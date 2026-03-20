@@ -17,6 +17,12 @@ LCEServer is a standalone dedicated server for Minecraft Legacy Console Edition,
 
 It speaks the native LCE TCP protocol directly so unmodified legacy clients can connect without a translation layer.
 
+## Workspace Role
+
+- Use `LCEServer` when you want a native Legacy Console Edition multiplayer target instead of a Java bridge route
+- Pair it with `LCEClient` or `LCEDebug` to test protocol behavior, gameplay flow, and multiplayer changes
+- Use `LCEBridge` separately when the goal is to reach Minecraft Java Edition servers rather than host an LCE-native world
+
 ## Current Capabilities
 
 - Native TCP networking with LCE packet framing
@@ -73,5 +79,7 @@ Run from the repository root so `server.properties` and `worlds/` resolve correc
 ## Related Repositories
 
 - Hub repo: https://github.com/veroxsity/MinecraftLCE
-- Client repo: https://github.com/veroxsity/LCEClient
 - Bridge repo: https://github.com/veroxsity/LCEBridge
+- Client repo: https://github.com/veroxsity/LCEClient
+- Debug client repo: https://github.com/veroxsity/LCEDebug
+- Launcher repo: https://github.com/veroxsity/LCELauncher
