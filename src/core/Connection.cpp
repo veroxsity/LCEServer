@@ -1017,7 +1017,33 @@ namespace LCEServer
         if (!PacketHandler::ReadUseItem(data, size, use))
             return;
 
-        // itemId < 0 means no item / air — nothing to place
+        const bool isCreative = (m_gameMode == 1);
+        ItemInstanceData* selected = nullptr;
+        if (m_hotbarSlot >= 0 &&
+            m_hotbarSlot < static_cast<int>(m_inventoryItems.size()))
+        {
+            selected = &m_inventoryItems[m_hotbarSlot];
+        }
+
+        if (!isCreative)
+        {
+            if (!selected || selected->IsEmpty())
+            {
+                if (selected)
+                    SendInventorySlotUpdate(m_hotbarSlot);
+                return;
+            }
+
+            if (use.itemId < 0 ||
+                selected->id != use.itemId ||
+                selected->aux != use.itemDamage)
+            {
+                SendInventorySlotUpdate(m_hotbarSlot);
+                return;
+            }
+        }
+
+        // itemId < 0 means no item / air - nothing to place
         if (use.itemId < 0) return;
         // Only block items have id < 256
         if (use.itemId >= 256) return;
@@ -1098,6 +1124,19 @@ namespace LCEServer
 
         Logger::Info("Server", "'%ls' placed block %d at (%d,%d,%d)",
             m_playerName.c_str(), use.itemId, px, py, pz);
+
+        if (!isCreative && selected)
+        {
+            if (selected->count > 1)
+            {
+                selected->count -= 1;
+            }
+            else
+            {
+                *selected = ItemInstanceData();
+            }
+            SendInventorySlotUpdate(m_hotbarSlot);
+        }
 
         if (onBlockUpdate)
             onBlockUpdate(this, px, py, pz, use.itemId, use.itemDamage & 0xF, oldBlockId, oldBlockData);
