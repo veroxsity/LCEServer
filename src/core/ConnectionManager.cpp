@@ -293,8 +293,13 @@ namespace LCEServer
                         x, y, z, wireBlockId, blockData, 0);
                     for (auto& [id, other] : m_connections)
                     {
-                        if (other.get() == src || !other->IsPlaying())
+                        if (!other->IsPlaying())
                             continue;
+                        if (other.get() == src)
+                        {
+                            other->SendPacket(pkt);
+                            continue;
+                        }
                         bool vis = other->HasChunkVisible(cx, cz);
                         Logger::Debug("Server",
                             "TileUpdate (%d,%d,%d) blk=%d -> '%ls' chunk(%d,%d) %s",

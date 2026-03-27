@@ -1565,29 +1565,33 @@ namespace LCEServer
         return out;
     }
 
-    // Convert the 32768-byte CTS x<<11|z<<7|y array into LCEServer's y+z*256+x*4096 layout.
+    // Convert the 32768-byte CTS x<<11|z<<7|y array into the server's XZY chunk layout.
     static void CtsToChunkBlocks(const std::vector<uint8_t>& cts,
                                   std::vector<uint8_t>& blocks, int yOffset)
     {
         // cts index: x<<11 | z<<7 | y  (x=0..15, z=0..15, y=0..127)
-        // chunk index: y + z*256 + x*4096  (HEIGHT=256, but we fill yOffset..yOffset+127)
+        if (yOffset >= kChunkStorageHeight)
+            return;
+
+        int maxY = (std::min)(128, kChunkStorageHeight - yOffset);
         for (int x = 0; x < 16; x++)
         for (int z = 0; z < 16; z++)
-        for (int y = 0; y < 128; y++) {
+        for (int y = 0; y < maxY; y++) {
             int src = (x << 11) | (z << 7) | y;
-            int dst = (yOffset + y) + z * 256 + x * 256 * 16;
+            int dst = ChunkBlockIndex(x, z, yOffset + y);
             if (dst >= 0 && dst < (int)blocks.size())
                 blocks[dst] = cts[src];
         }
     }
 
     // Convert 16384-byte sparse nibble array (Java DataLayer x<<11|z<<7|y) into
-    // LCEServer's nibble array (y+z*256+x*4096).
+    // the server's packed nibble array.
     static void SparseToChunkNibbles(const std::vector<uint8_t>& sparse,
-                                      std::vector<uint8_t>& nibbles, int yOffset)
+                                       std::vector<uint8_t>& nibbles, int yOffset)
     {
-        // sparse is a packed nibble array: index = x<<11|z<<7|y, packed as (y+z*256+x*4096)/2
-        // We need to read nibble at (x,z,y) and write to nibble at (yOffset+y, z, x).
+        if (yOffset >= kChunkStorageHeight)
+            return;
+
         auto readNibble = [](const std::vector<uint8_t>& arr, int idx) -> uint8_t {
             int b = idx >> 1;
             if (b < 0 || b >= (int)arr.size()) return 0;
@@ -1600,11 +1604,12 @@ namespace LCEServer
             if (idx & 1) arr[b] = (uint8_t)((arr[b] & 0x0F) | (v << 4));
             else         arr[b] = (uint8_t)((arr[b] & 0xF0) | v);
         };
+        int maxY = (std::min)(128, kChunkStorageHeight - yOffset);
         for (int x = 0; x < 16; x++)
         for (int z = 0; z < 16; z++)
-        for (int y = 0; y < 128; y++) {
+        for (int y = 0; y < maxY; y++) {
             int srcIdx = (x << 11) | (z << 7) | y;
-            int dstIdx = (yOffset + y) + z * 256 + x * 256 * 16;
+            int dstIdx = ChunkBlockIndex(x, z, yOffset + y);
             writeNibble(nibbles, dstIdx, readNibble(sparse, srcIdx));
         }
     }
@@ -1654,8 +1659,8 @@ namespace LCEServer
             chunk->chunkZ   = chunkZ;
             chunk->generated = true;
 
-            constexpr int HEIGHT      = 256;
-            constexpr int TOTAL       = 16 * HEIGHT * 16;
+            constexpr int HEIGHT = kChunkStorageHeight;
+            constexpr int TOTAL = kChunkTotalBlocks;
             chunk->blocks.assign(TOTAL,       0);
             chunk->data.assign(TOTAL / 2,     0);
             chunk->skyLight.assign(TOTAL / 2, 0xFF);
@@ -1664,7 +1669,7 @@ namespace LCEServer
 
             // Lower half (y=0..127) blocks
             auto lowerBlocks = ReadCts(s);
-            // Upper half (y=128..255) blocks
+            // Upper half is still consumed from the stream even though the server stores 128-high chunks.
             auto upperBlocks = ReadCts(s);
             // Lower data nibbles
             auto lowerData   = ReadSparse(s);
@@ -1747,8 +1752,8 @@ namespace LCEServer
         chunk->generated = true;
 
         // Pre-size vanilla arrays so both classic and Anvil decoding can fill them.
-        constexpr int HEIGHT = 256;
-        constexpr int TOTAL_BLOCKS = 16 * HEIGHT * 16;
+        constexpr int HEIGHT = kChunkStorageHeight;
+        constexpr int TOTAL_BLOCKS = kChunkTotalBlocks;
         chunk->blocks.resize(TOTAL_BLOCKS, 0);
         chunk->data.resize(TOTAL_BLOCKS / 2, 0);
         chunk->skyLight.resize(TOTAL_BLOCKS / 2, 0xFF);
@@ -1842,7 +1847,7 @@ namespace LCEServer
                         continue;
 
                     int secY = sec->getByte("Y", 0);
-                    if (secY < 0 || secY > 15)
+                    if (secY < 0 || secY >= (kChunkStorageHeight / 16))
                         continue;
 
                     auto secBlocks = sec->get("Blocks");
@@ -1857,13 +1862,13 @@ namespace LCEServer
                     for (int sy = 0; sy < 16; sy++)
                     {
                         int wy = secY * 16 + sy;
-                        if (wy < 0 || wy >= 256) continue;
+                        if (wy < 0 || wy >= kChunkStorageHeight) continue;
                         for (int z = 0; z < 16; z++)
                         {
                             for (int x = 0; x < 16; x++)
                             {
                                 int sidx = (sy * 16 + z) * 16 + x;
-                                int didx = wy + z * 256 + x * 256 * 16;
+                                int didx = ChunkBlockIndex(x, z, wy);
 
                                 chunk->blocks[didx] =
                                     secBlocks->byteArrayVal[sidx];
@@ -1927,7 +1932,7 @@ namespace LCEServer
 
                     // In 1.18+ Y can be -4..19; skip sections outside 0-255.
                     int secY = (int)(int8_t)sec->getByte("Y", -1);
-                    if (secY < 0 || secY > 15)
+                    if (secY < 0 || secY >= (kChunkStorageHeight / 16))
                         continue;
 
                     // Locate palette and block-state long-array.
@@ -1986,7 +1991,7 @@ namespace LCEServer
                             {
                                 for (int x = 0; x < 16; x++)
                                 {
-                                    int didx = wy + z * 256 + x * 256 * 16;
+                                    int didx = ChunkBlockIndex(x, z, wy);
                                     chunk->blocks[didx] = palIds[0];
                                     if (palData[0])
                                         writeNibblePal(chunk->data, didx, palData[0]);
@@ -2058,7 +2063,7 @@ namespace LCEServer
                                 if (palIdx < 0 || palIdx >= palSize)
                                     palIdx = 0;
 
-                                int didx = wy + z * 256 + x * 256 * 16;
+                                int didx = ChunkBlockIndex(x, z, wy);
                                 chunk->blocks[didx] = palIds[palIdx];
                                 if (palData[palIdx])
                                     writeNibblePal(chunk->data, didx, palData[palIdx]);
@@ -2111,10 +2116,10 @@ namespace LCEServer
     void World::GenerateFlatChunk(ChunkData& chunk)
     {
         // Flat world: bedrock y=0, dirt y=1-3, grass y=4
-        constexpr int HEIGHT = 256;
+        constexpr int HEIGHT = kChunkStorageHeight;
         constexpr int YS = 5; // solid layers
-        int totalBlocks = 16 * HEIGHT * 16;
-        int halfBlocks = totalBlocks / 2;
+        int totalBlocks = kChunkTotalBlocks;
+        int halfBlocks = kChunkTotalNibbles;
 
         chunk.blocks.resize(totalBlocks, 0);
         chunk.data.resize(halfBlocks, 0);
@@ -2123,13 +2128,11 @@ namespace LCEServer
         chunk.biomes.resize(256, 1); // plains
         chunk.heightMap.resize(256, YS);
 
-        // Fill blocks in XZY order (y + z*HEIGHT + x*HEIGHT*16 for full storage)
-        // But for McRegion NBT the storage is YZX: index = y + (z * HEIGHT) + (x * HEIGHT * 16)
-        // Actually standard MC uses XZY: index = y + (z * 256) + (x * 256 * 16)
+        // Fill blocks in the server's XZY order.
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 for (int y = 0; y < HEIGHT; y++) {
-                    int idx = y + z * HEIGHT + x * HEIGHT * 16;
+                    int idx = ChunkBlockIndex(x, z, y);
                     if (y == 0)      chunk.blocks[idx] = 7;  // bedrock
                     else if (y < 4)  chunk.blocks[idx] = 3;  // dirt
                     else if (y == 4) chunk.blocks[idx] = 2;  // grass
@@ -2250,9 +2253,9 @@ namespace LCEServer
 
     bool World::NeedsSkyLightRebuild(const ChunkData& chunk)
     {
-        constexpr int HEIGHT = 256;
-        if ((int)chunk.blocks.size() < (16 * HEIGHT * 16) ||
-            (int)chunk.skyLight.size() < (16 * HEIGHT * 16) / 2)
+        constexpr int HEIGHT = kChunkStorageHeight;
+        if ((int)chunk.blocks.size() < kChunkTotalBlocks ||
+            (int)chunk.skyLight.size() < kChunkTotalNibbles)
             return true;
 
         auto getNibble = [](const std::vector<uint8_t>& arr, int index) -> uint8_t
@@ -2269,7 +2272,7 @@ namespace LCEServer
         {
             for (int z = 0; z < 16; z++)
             {
-                int idxTop = (HEIGHT - 1) + z * HEIGHT + x * HEIGHT * 16;
+                int idxTop = ChunkBlockIndex(x, z, HEIGHT - 1);
                 uint8_t topId = chunk.blocks[idxTop];
                 if (!IsTransparentForSkylight(topId))
                     continue;
@@ -2290,9 +2293,9 @@ namespace LCEServer
 
     bool World::NeedsBlockLightRebuild(const ChunkData& chunk)
     {
-        constexpr int HEIGHT = 256;
-        if ((int)chunk.blocks.size() < (16 * HEIGHT * 16) ||
-            (int)chunk.blockLight.size() < (16 * HEIGHT * 16) / 2)
+        constexpr int HEIGHT = kChunkStorageHeight;
+        if ((int)chunk.blocks.size() < kChunkTotalBlocks ||
+            (int)chunk.blockLight.size() < kChunkTotalNibbles)
             return true;
 
         auto getNibble = [](const std::vector<uint8_t>& arr, int index) -> uint8_t
@@ -2311,7 +2314,7 @@ namespace LCEServer
             {
                 for (int y = 0; y < HEIGHT; y++)
                 {
-                    int idx = y + z * HEIGHT + x * HEIGHT * 16;
+                    int idx = ChunkBlockIndex(x, z, y);
                     uint8_t emission = GetBlockLightEmission(chunk.blocks[idx]);
                     if (emission == 0)
                         continue;
@@ -2333,8 +2336,8 @@ namespace LCEServer
 
     void World::RebuildSimpleSkyLight(ChunkData& chunk)
     {
-        constexpr int HEIGHT = 256;
-        constexpr int TOTAL_BLOCKS = 16 * HEIGHT * 16;
+        constexpr int HEIGHT = kChunkStorageHeight;
+        constexpr int TOTAL_BLOCKS = kChunkTotalBlocks;
         constexpr int PAD = 1;
         constexpr int EXT = 16 + PAD * 2;
 
@@ -2355,7 +2358,7 @@ namespace LCEServer
         };
 
         auto idx3d = [](int x, int y, int z) {
-            return y + z * 256 + x * 256 * 16;
+            return ChunkBlockIndex(x, z, y);
         };
 
         auto floorDiv16 = [](int value) {
@@ -2389,8 +2392,8 @@ namespace LCEServer
         };
 
         std::vector<uint8_t> skyPad(EXT * EXT * HEIGHT, 0);
-        auto padIndex = [EXT](int px, int y, int pz) {
-            return y + pz * 256 + px * 256 * EXT;
+        auto padIndex = [HEIGHT, EXT](int px, int y, int pz) {
+            return y + pz * HEIGHT + px * HEIGHT * EXT;
         };
 
         // Pass 1: top-down direct skylight.
@@ -2545,8 +2548,8 @@ namespace LCEServer
 
     void World::RebuildSimpleBlockLight(ChunkData& chunk)
     {
-        constexpr int HEIGHT = 256;
-        constexpr int TOTAL_BLOCKS = 16 * HEIGHT * 16;
+        constexpr int HEIGHT = kChunkStorageHeight;
+        constexpr int TOTAL_BLOCKS = kChunkTotalBlocks;
         // Padded working volume: 1 block border around the 16x16 chunk
         // so light from neighbour emitters bleeds correctly into our edges.
         constexpr int PAD  = 14; // torch range is 14; pad by full reach
@@ -2583,7 +2586,7 @@ namespace LCEServer
             int ncz = (wz < 0) ? (wz - 15) / 16 : wz / 16;
             if (ncx == chunk.chunkX && ncz == chunk.chunkZ)
             {
-                int idx = wy + lz * 256 + lx * 256 * 16;
+                int idx = ChunkBlockIndex(lx, lz, wy);
                 if (idx < (int)chunk.blocks.size())
                     return chunk.blocks[idx];
                 return 0;
@@ -2592,7 +2595,7 @@ namespace LCEServer
             int64_t key = ChunkKey(ncx, ncz);
             auto it = m_chunks.find(key);
             if (it == m_chunks.end() || !it->second) return 0;
-            int idx = wy + lz * 256 + lx * 256 * 16;
+            int idx = ChunkBlockIndex(lx, lz, wy);
             if (idx < (int)it->second->blocks.size())
                 return it->second->blocks[idx];
             return 0;
@@ -2664,7 +2667,7 @@ namespace LCEServer
                     uint8_t v = getPadLight(x + PAD, y, z + PAD);
                     if (v > 0)
                         setNibble(chunk.blockLight,
-                                  y + z * 256 + x * 256 * 16, v);
+                                  ChunkBlockIndex(x, z, y), v);
                 }
             }
         }
@@ -2677,10 +2680,7 @@ namespace LCEServer
         // + skylight[half] + biomes[256]
         // Trimmed to highest non-air Y
 
-        // LCE full-chunk block-region updates are applied at full build height.
-        // Sending trimmed height can leave stale client-side data above ys,
-        // which presents as striping/shadow artifacts until local updates relight.
-        int highY = 256;
+        int highY = kChunkStorageHeight;
         chunk.ys = highY;
 
         int tileCount = 16 * highY * 16;
@@ -2694,7 +2694,7 @@ namespace LCEServer
             for (int z = 0; z < 16; z++) {
                 for (int y = 0; y < highY; y++) {
                     int netSlot = y * 16 * 16 + z * 16 + x;
-                    int srcIdx = y + z * 256 + x * 256 * 16;
+                    int srcIdx = ChunkBlockIndex(x, z, y);
                     if (srcIdx < (int)chunk.blocks.size())
                         chunk.rawData[netSlot] = chunk.blocks[srcIdx];
                 }
@@ -2710,8 +2710,6 @@ namespace LCEServer
 
         // Data/light planes use DataLayer-compatible nibble packing:
         // x-major, then z, then y in pairs (low nibble = y, high nibble = y+1).
-        // For full-height chunks the client consumes these in two contiguous bands:
-        // lower section [0,128) then upper section [128,256).
         auto packNibblesRange = [&](const std::vector<uint8_t>& src,
                                     int outOffset,
                                     int yStart,
@@ -2728,7 +2726,7 @@ namespace LCEServer
             for (int x = 0; x < 16; x++) {
                 for (int z = 0; z < 16; z++) {
                     for (int y = yStart; (y + 1) < yEnd; y += 2) {
-                        int idx0 = y + z * 256 + x * 256 * 16;
+                        int idx0 = ChunkBlockIndex(x, z, y);
                         int idx1 = idx0 + 1;
                         uint8_t packed = (uint8_t)(getNibble(src, idx0) |
                                                    (getNibble(src, idx1) << 4));
@@ -2742,13 +2740,7 @@ namespace LCEServer
         };
 
         auto packNibbles = [&](const std::vector<uint8_t>& src, int outOffset) {
-            int out = outOffset;
-            const int sectionSplitY = 128;
-            // Match LevelChunk::getReorderedBlocksAndData ordering:
-            // lower section first, then upper section.
-            out = packNibblesRange(src, out, 0, (std::min)(highY, sectionSplitY));
-            if (highY > sectionSplitY)
-                out = packNibblesRange(src, out, sectionSplitY, highY);
+            packNibblesRange(src, outOffset, 0, highY);
         };
 
         // Data nibbles (offset: tileCount)
@@ -2835,24 +2827,23 @@ namespace LCEServer
     // ---------------------------------------------------------------
     ChunkData* World::SetBlock(int x, int y, int z, int blockId, int blockData)
     {
-        if (y < 0 || y >= 256) return nullptr;
+        if (y < 0 || y >= kChunkStorageHeight) return nullptr;
 
         int chunkX = x >> 4;
         int chunkZ = z >> 4;
         ChunkData* chunk = GetChunk(chunkX, chunkZ);
         if (!chunk) return nullptr;
 
-        // Ensure block arrays are sized for full 256-height
-        constexpr int BLOCKS = 16 * 256 * 16;
+        // Ensure block arrays are sized for the native 128-high world model.
+        constexpr int BLOCKS = kChunkTotalBlocks;
         if ((int)chunk->blocks.size() < BLOCKS)
             chunk->blocks.resize(BLOCKS, 0);
         if ((int)chunk->data.size() < BLOCKS / 2)
             chunk->data.resize(BLOCKS / 2, 0);
 
-        // XZY storage: index = x_local*256*16 + z_local*256 + y
         int lx = ((x % 16) + 16) % 16;
         int lz = ((z % 16) + 16) % 16;
-        int idx = lx * 256 * 16 + lz * 256 + y;
+        int idx = ChunkBlockIndex(lx, lz, y);
 
         chunk->blocks[idx] = (uint8_t)(blockId & 0xFF);
 

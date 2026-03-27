@@ -400,7 +400,7 @@ namespace LCEServer
             seed,
             gameMode,
             0,                      // dimension (overworld)
-            0,                      // mapHeight (256 cast to byte = 0)
+            (uint8_t)LEGACY_WORLD_HEIGHT,
             (uint8_t)m_config->maxPlayers,
             (int8_t)difficulty,
             0,                      // multiplayerInstanceId
@@ -806,7 +806,7 @@ namespace LCEServer
             return;
 
         if (!m_world) return;
-        if (act.y < 0 || act.y > 255) return;
+        if (act.y < 0 || act.y >= LEGACY_WORLD_HEIGHT) return;
 
         ChunkData* chunk = m_world->SetBlock(act.x, act.y, act.z, 0, 0);
         if (!chunk) return;
@@ -887,7 +887,7 @@ namespace LCEServer
             {
                 int lx = ((use.x % 16) + 16) % 16;
                 int lz = ((use.z % 16) + 16) % 16;
-                int idx = lx * 256 * 16 + lz * 256 + use.y;
+                int idx = ChunkBlockIndex(lx, lz, use.y);
                 if (idx >= 0 && idx < (int)clickedChunk->blocks.size())
                     clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
             }
@@ -904,7 +904,7 @@ namespace LCEServer
             }
         }
 
-        if (py < 0 || py > 255) return;
+        if (py < 0 || py >= LEGACY_WORLD_HEIGHT) return;
 
         // Don't overwrite a non-replaceable solid block
         ChunkData* destChunk = m_world->GetChunk(px >> 4, pz >> 4);
@@ -912,7 +912,7 @@ namespace LCEServer
         {
             int lx = ((px % 16) + 16) % 16;
             int lz = ((pz % 16) + 16) % 16;
-            int idx = lx * 256 * 16 + lz * 256 + py;
+            int idx = ChunkBlockIndex(lx, lz, py);
             if (idx >= 0 && idx < (int)destChunk->blocks.size())
             {
                 int existing = destChunk->blocks[idx];

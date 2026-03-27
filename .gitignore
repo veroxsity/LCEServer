@@ -1,5 +1,6 @@
 build/
 dist/
+scripts/output/
 .vs/
 .vscode/
 .idea/
@@ -19,6 +20,11 @@ compile_commands.json
 
 server.properties
 worlds/
+logs/
 rcon.log
+banned-ips.json
+banned-players.json
+ops.json
+whitelist.json
 build.bat
 PACKETS.md

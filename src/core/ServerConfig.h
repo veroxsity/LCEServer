@@ -21,7 +21,7 @@ namespace LCEServer
         std::string  levelId;
         std::string  levelSeed;
         std::string  levelType          = "default";
-        int          maxBuildHeight     = 256;
+        int          maxBuildHeight     = LEGACY_WORLD_HEIGHT;
 
         // Game settings
         int  gamemode                   = 0;

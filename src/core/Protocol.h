@@ -13,6 +13,9 @@ namespace LCEServer
 
     // From extraX64.h: MINECRAFT_NET_MAX_PLAYERS = 256
     constexpr int MAX_PLAYERS_HARD = 256;
+    constexpr int LEGACY_WORLD_HEIGHT = 128;
+    constexpr int LEGACY_CHUNK_SIDE = 16;
+    constexpr int LEGACY_CHUNK_COLUMN_COUNT = LEGACY_CHUNK_SIDE * LEGACY_CHUNK_SIDE;
 
     // From WinsockNetLayer.h
     constexpr int DEFAULT_PORT = 25565;

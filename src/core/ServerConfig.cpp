@@ -105,7 +105,11 @@ namespace LCEServer
         cfg.levelId        = get("level-id", "");
         cfg.levelSeed      = get("level-seed", "");
         cfg.levelType      = get("level-type", "default");
-        cfg.maxBuildHeight = ParseInt(get("max-build-height", "256"), 256);
+        cfg.maxBuildHeight = ParseInt(
+            get("max-build-height", std::to_string(LEGACY_WORLD_HEIGHT)),
+            LEGACY_WORLD_HEIGHT);
+        if (cfg.maxBuildHeight <= 0 || cfg.maxBuildHeight > LEGACY_WORLD_HEIGHT)
+            cfg.maxBuildHeight = LEGACY_WORLD_HEIGHT;
 
         // Game settings
         cfg.gamemode            = ParseInt(get("gamemode", "0"), 0);

@@ -8,6 +8,17 @@
 
 namespace LCEServer
 {
+    inline constexpr int kChunkStorageHeight = LEGACY_WORLD_HEIGHT;
+    inline constexpr int kChunkSide = LEGACY_CHUNK_SIDE;
+    inline constexpr int kChunkColumnCount = LEGACY_CHUNK_COLUMN_COUNT;
+    inline constexpr int kChunkTotalBlocks = kChunkSide * kChunkStorageHeight * kChunkSide;
+    inline constexpr int kChunkTotalNibbles = kChunkTotalBlocks / 2;
+
+    inline constexpr int ChunkBlockIndex(int x, int z, int y)
+    {
+        return y + z * kChunkStorageHeight + x * kChunkStorageHeight * kChunkSide;
+    }
+
     // In-memory chunk data (the raw block/light/biome arrays)
     struct ChunkData
     {

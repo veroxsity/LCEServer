@@ -793,7 +793,7 @@ namespace LCEServer
         w.writeByte(PacketId::Respawn);
         w.writeByte((uint8_t)dimension);
         w.writeByte((uint8_t)gameType);
-        w.writeShort(256);              // mapHeight
+        w.writeShort(LEGACY_WORLD_HEIGHT);
         w.writeUtf(L"default");         // levelType name
         w.writeLong(seed);
         w.writeByte((uint8_t)difficulty);
