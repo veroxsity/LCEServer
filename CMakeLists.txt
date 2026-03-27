@@ -22,6 +22,7 @@ add_executable(LCEServer
     src/core/Connection.cpp
     src/core/PacketHandler.cpp
     src/console/Console.cpp
+    src/console/LegacyItemIds.cpp
     src/world/Nbt.cpp
     src/world/RegionFile.cpp
     src/world/World.cpp

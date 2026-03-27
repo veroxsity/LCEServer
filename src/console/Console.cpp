@@ -11,6 +11,7 @@
 #include "../access/BanList.h"
 #include "../access/Whitelist.h"
 #include "../access/OpsList.h"
+#include "LegacyItemIds.h"
 
 namespace LCEServer
 {
@@ -182,7 +183,7 @@ namespace LCEServer
         Logger::Info("Console", "  time <set|add> v - Set world time");
         Logger::Info("Console", "  weather <type>   - Set weather");
         Logger::Info("Console", "  kill <player>    - Kill a player");
-        Logger::Info("Console", "  give <p> <id> .. - Give item");
+        Logger::Info("Console", "  give <p> <item> [amount] [aux] - Give item by id or name");
         Logger::Info("Console", "  plugins          - List plugins");
         Logger::Info("Console", "  reload           - Reload configs");
     }
@@ -734,7 +735,9 @@ namespace LCEServer
         // give <player> <id> [amount] [aux]
         if (args.size() < 3) {
             Logger::Info("Console",
-                "Usage: give <player> <id> [amount] [aux]");
+                "Usage: give <player> <item-id-or-name> [amount] [aux]");
+            Logger::Info("Console",
+                "Examples: give Player 311 | give Player diamond_chestplate | give Player minecraft:oak_log 16");
             return;
         }
         auto* cm = m_server->GetConnectionManager();
@@ -746,12 +749,16 @@ namespace LCEServer
             return;
         }
         int itemId = 0, amount = 1, aux = 0;
-        try { itemId = std::stoi(args[2]); }
+        try {
+            itemId = std::stoi(args[2]);
+        }
         catch (...) {
-            Logger::Warn("Console",
-                "Invalid item id: %s",
-                args[2].c_str());
-            return;
+            if (!TryResolveLegacyItemSpec(args[2], itemId, aux)) {
+                Logger::Warn("Console",
+                    "Unknown item id/name: %s",
+                    args[2].c_str());
+                return;
+            }
         }
         if (args.size() >= 4) {
             try { amount = std::stoi(args[3]); }
@@ -765,12 +772,12 @@ namespace LCEServer
         bool delivered = conn->GiveItem(itemId, amount, aux);
         if (delivered) {
             Logger::Info("Console",
-                "Gave %s x%d of item %d:%d.",
-                args[1].c_str(), amount, itemId, aux);
+                "Gave %s x%d of item %d:%d (%s).",
+                args[1].c_str(), amount, itemId, aux, args[2].c_str());
         } else {
             Logger::Warn("Console",
-                "Inventory full while giving %s x%d of item %d:%d. Partial delivery may have occurred.",
-                args[1].c_str(), amount, itemId, aux);
+                "Inventory full while giving %s x%d of item %d:%d (%s). Partial delivery may have occurred.",
+                args[1].c_str(), amount, itemId, aux, args[2].c_str());
         }
     }
 
