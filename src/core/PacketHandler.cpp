@@ -872,10 +872,11 @@ namespace LCEServer
     std::vector<uint8_t> PacketHandler::WriteAddPlayer(
         int entityId, const std::wstring& name,
         double x, double y, double z,
-        float yRot, float xRot,
+        float yRot, float xRot, float yHeadRot,
         int16_t carriedItem,
         PlayerUID xuid, PlayerUID onlineXuid,
         uint8_t playerIndex,
+        float health,
         uint32_t skinId, uint32_t capeId, uint32_t privileges)
     {
         ByteWriter w;
@@ -889,7 +890,7 @@ namespace LCEServer
         // yRot/xRot packed as byte (angle * 256/360)
         w.writeByte((uint8_t)(int)(yRot * 256.0f / 360.0f));
         w.writeByte((uint8_t)(int)(xRot * 256.0f / 360.0f));
-        w.writeByte(0); // yHeadRot
+        w.writeByte((uint8_t)(int)(yHeadRot * 256.0f / 360.0f));
         w.writeShort(carriedItem);
         w.writePlayerUID(xuid);
         w.writePlayerUID(onlineXuid);
@@ -898,18 +899,28 @@ namespace LCEServer
         w.writeInt((int32_t)capeId);
         w.writeInt((int32_t)privileges);
 
-        // SynchedEntityData: must send at least one item so that
-        // SynchedEntityData::unpack() returns a non-null vector.
-        // If we send bare 0x7F (no items), unpack returns nullptr,
-        // and AddPlayerPacket::getUnpackedData() then calls
-        // entityData->getAll() — but entityData is nullptr on the
-        // received packet, causing a crash.
-        //
-        // We send only id=0 (Entity shared flags, BYTE=0) which is
-        // defined on every Entity/LivingEntity/RemotePlayer.
-        // header = ((type=0 << 5) | (id=0 & 0x1F)) & 0xFF = 0x00
-        w.writeByte(0x00); // header: TYPE_BYTE, id=0
-        w.writeByte(0);    // value: shared flags = 0
+        // SynchedEntityData: send the full player metadata layout instead of a
+        // one-item stub so RemotePlayer receives the same shape the native
+        // server would have packed via entityData->packAll().
+        // ids/types from the LCE source:
+        //   0 BYTE  shared flags
+        //   1 SHORT air supply
+        //   6 FLOAT health
+        //   7 INT   effect color
+        //   8 BYTE  effect ambience
+        //   9 BYTE  arrow count
+        //  16 BYTE  player flags
+        //  17 FLOAT absorption
+        //  18 INT   score
+        w.writeByte(0x00); w.writeByte(0);
+        w.writeByte(0x21); w.writeShort(300);
+        w.writeByte(0x66); w.writeFloat(health);
+        w.writeByte(0x47); w.writeInt(0);
+        w.writeByte(0x08); w.writeByte(0);
+        w.writeByte(0x09); w.writeByte(0);
+        w.writeByte(0x10); w.writeByte(0);
+        w.writeByte(0x71); w.writeFloat(0.0f);
+        w.writeByte(0x52); w.writeInt(0);
         w.writeByte(0x7F); // EOF
         return w.data();
     }

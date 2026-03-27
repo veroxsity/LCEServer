@@ -226,11 +226,12 @@ namespace LCEServer
                     joined->GetEntityId(),
                     joined->GetPlayerName(),
                     joined->GetX(), joined->GetY(), joined->GetZ(),
-                    joined->GetYRot(), joined->GetXRot(),
+                    joined->GetYRot(), joined->GetXRot(), joined->GetYRot(),
                     0,
                     joined->GetPrimaryXuid(),
                     joined->GetOnlineXuid(),
-                    joined->GetSmallId());
+                    joined->GetSmallId(),
+                    joined->GetHealth());
                 for (auto& [id, other] : m_connections)
                     if (other.get() != joined && other->IsPlaying())
                         other->SendPacket(addNew);
@@ -249,11 +250,12 @@ namespace LCEServer
                             other->GetEntityId(),
                             other->GetPlayerName(),
                             other->GetX(), other->GetY(), other->GetZ(),
-                            other->GetYRot(), other->GetXRot(),
+                            other->GetYRot(), other->GetXRot(), other->GetYRot(),
                             0,
                             other->GetPrimaryXuid(),
                             other->GetOnlineXuid(),
-                            other->GetSmallId());
+                            other->GetSmallId(),
+                            other->GetHealth());
                         joined->SendPacket(addExisting);
                     }
                 }

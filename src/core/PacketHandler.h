@@ -385,10 +385,11 @@ namespace LCEServer
         static std::vector<uint8_t> WriteAddPlayer(
             int entityId, const std::wstring& name,
             double x, double y, double z,
-            float yRot, float xRot,
+            float yRot, float xRot, float yHeadRot,
             int16_t carriedItem,
             PlayerUID xuid, PlayerUID onlineXuid,
             uint8_t playerIndex,
+            float health = 20.0f,
             uint32_t skinId = 0, uint32_t capeId = 0,
             uint32_t privileges = 0);
 
