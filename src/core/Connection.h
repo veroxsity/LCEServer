@@ -111,7 +111,7 @@ namespace LCEServer
         using WhitelistCheck = std::function<bool(PlayerUID, const std::wstring&)>;
         using JoinCallback = std::function<void(Connection*)>;
         using ChatCallback = std::function<void(Connection*, const std::wstring&)>;
-        using BlockUpdateCallback = std::function<void(Connection*, int, int, int, int, int)>;
+        using BlockUpdateCallback = std::function<void(Connection*, int, int, int, int, int, int, int)>;
 
         XuidBanCheck        xuidBanCheck;
         DuplicateXuidCheck  duplicateXuidCheck;
@@ -119,7 +119,7 @@ namespace LCEServer
         WhitelistCheck      whitelistCheck;
         JoinCallback        onPlayerJoined;
         ChatCallback        onPlayerChat;
-        BlockUpdateCallback onBlockUpdate; // (source, x, y, z, blockId, blockData)
+        BlockUpdateCallback onBlockUpdate; // (source, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData)
 
         // Called by ConnectionManager to notify this connection that another
         // player has joined/left (for AddPlayer / RemoveEntities broadcast)

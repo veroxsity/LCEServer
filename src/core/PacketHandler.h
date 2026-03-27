@@ -298,6 +298,11 @@ namespace LCEServer
         static std::vector<uint8_t> WriteTileUpdate(
             int x, int y, int z, int blockId, int blockData, int levelIdx = 0);
 
+        // LevelEventPacket (id=61) server->client
+        // Wire: [byte 61][int type][int x][byte y][int z][int data][bool globalEvent]
+        static std::vector<uint8_t> WriteLevelEvent(
+            int type, int x, int y, int z, int data, bool globalEvent);
+
         // PlayerActionPacket (id=14) client->server
         struct PlayerActionData {
             int action = 0; // 0=START_DESTROY, 1=ABORT, 2=STOP_DESTROY, 3=DROP_ALL, 4=DROP, 5=RELEASE

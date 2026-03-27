@@ -71,6 +71,7 @@ namespace LCEServer
         constexpr int ChunkVisibility = 50;
         constexpr int BlockRegionUpdate = 51;
         constexpr int TileUpdate      = 53;
+        constexpr int LevelEvent      = 61;
         constexpr int ContainerClose  = 101;
         constexpr int SetCreativeModeSlot = 107;
         constexpr int GameEvent           = 70;
@@ -126,5 +127,10 @@ namespace LCEServer
     {
         constexpr uint8_t Hurt  = 2;
         constexpr uint8_t Death = 3;
+    }
+
+    namespace LevelEventId
+    {
+        constexpr int DestroyBlockParticles = 2001;
     }
 }

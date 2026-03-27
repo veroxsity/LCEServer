@@ -20,7 +20,7 @@ namespace LCEServer
         std::wstring levelName          = L"world";
         std::string  levelId;
         std::string  levelSeed;
-        std::string  levelType          = "default";
+        std::string  levelType          = "flat";
         int          maxBuildHeight     = LEGACY_WORLD_HEIGHT;
 
         // Game settings

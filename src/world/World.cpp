@@ -120,13 +120,21 @@ namespace LCEServer
             m_seed = ((int64_t)rd() << 32) | rd();
         }
 
+        m_levelType = config.levelType;
+        if (m_levelType != "flat")
+        {
+            Logger::Warn("World",
+                "level-type='%s' is not implemented yet; generating flat terrain instead",
+                m_levelType.c_str());
+            m_levelType = "flat";
+        }
+
         m_spawnX = 0;
-        m_spawnY = (m_levelType == "flat") ? 4 : 5;
+        m_spawnY = 4;
         m_spawnZ = 0;
         m_gameTime = 0; m_dayTime = 0;
         m_gameMode = config.gamemode;
         m_difficulty = config.difficulty;
-        m_levelType = config.levelType;
 
         SaveLevelDat();
         Logger::Info("World", "Created: seed=%lld", m_seed);

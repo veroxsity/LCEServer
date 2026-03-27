@@ -573,7 +573,7 @@ namespace LCEServer
         // 7. Teleport to spawn
         double sy = (double)spawnY;
         SendPacket(PacketHandler::WriteMovePlayerPosRot(
-            (double)spawnX + 0.5, sy, sy + 1.62,
+            (double)spawnX + 0.5, sy + 1.62, sy,
             (double)spawnZ + 0.5,
             0.0f, 0.0f, true, false));
 
@@ -808,6 +808,26 @@ namespace LCEServer
         if (!m_world) return;
         if (act.y < 0 || act.y >= LEGACY_WORLD_HEIGHT) return;
 
+        int oldBlockId = 0;
+        int oldBlockData = 0;
+        ChunkData* existingChunk = m_world->GetChunk(act.x >> 4, act.z >> 4);
+        if (existingChunk && !existingChunk->blocks.empty())
+        {
+            int lx = ((act.x % 16) + 16) % 16;
+            int lz = ((act.z % 16) + 16) % 16;
+            int idx = ChunkBlockIndex(lx, lz, act.y);
+            if (idx >= 0 && idx < (int)existingChunk->blocks.size())
+            {
+                oldBlockId = existingChunk->blocks[idx];
+                if (!existingChunk->data.empty())
+                {
+                    int nibbleIndex = idx >> 1;
+                    uint8_t packed = existingChunk->data[nibbleIndex];
+                    oldBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                }
+            }
+        }
+
         ChunkData* chunk = m_world->SetBlock(act.x, act.y, act.z, 0, 0);
         if (!chunk) return;
 
@@ -815,7 +835,7 @@ namespace LCEServer
             m_playerName.c_str(), act.x, act.y, act.z);
 
         if (onBlockUpdate)
-            onBlockUpdate(this, act.x, act.y, act.z, 0, 0);
+            onBlockUpdate(this, act.x, act.y, act.z, 0, 0, oldBlockId, oldBlockData);
     }
 
     // ---------------------------------------------------------------
@@ -908,6 +928,8 @@ namespace LCEServer
 
         // Don't overwrite a non-replaceable solid block
         ChunkData* destChunk = m_world->GetChunk(px >> 4, pz >> 4);
+        int oldBlockId = 0;
+        int oldBlockData = 0;
         if (destChunk && !destChunk->blocks.empty())
         {
             int lx = ((px % 16) + 16) % 16;
@@ -916,6 +938,13 @@ namespace LCEServer
             if (idx >= 0 && idx < (int)destChunk->blocks.size())
             {
                 int existing = destChunk->blocks[idx];
+                oldBlockId = existing;
+                if (!destChunk->data.empty())
+                {
+                    int nibbleIndex = idx >> 1;
+                    uint8_t packed = destChunk->data[nibbleIndex];
+                    oldBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                }
                 if (existing != 0 && !IsReplaceableBlock(existing))
                     return;
             }
@@ -929,7 +958,7 @@ namespace LCEServer
             m_playerName.c_str(), use.itemId, px, py, pz);
 
         if (onBlockUpdate)
-            onBlockUpdate(this, px, py, pz, use.itemId, use.itemDamage & 0xF);
+            onBlockUpdate(this, px, py, pz, use.itemId, use.itemDamage & 0xF, oldBlockId, oldBlockData);
     }
 
     // ---------------------------------------------------------------
@@ -1136,7 +1165,7 @@ namespace LCEServer
         // Teleport to spawn — matches player->connection->teleport() in source
         double sy = (double)spawnY;
         SendPacket(PacketHandler::WriteMovePlayerPosRot(
-            m_x, sy, sy + 1.62, m_z,
+            m_x, sy + 1.62, sy, m_z,
             0.0f, 0.0f, true, false));
 
         // Resend chunks so the world is visible after respawn

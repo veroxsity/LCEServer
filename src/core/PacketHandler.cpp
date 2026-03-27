@@ -704,6 +704,20 @@ namespace LCEServer
         return w.data();
     }
 
+    std::vector<uint8_t> PacketHandler::WriteLevelEvent(
+        int type, int x, int y, int z, int data, bool globalEvent)
+    {
+        ByteWriter w;
+        w.writeByte(PacketId::LevelEvent);
+        w.writeInt(type);
+        w.writeInt(x);
+        w.writeByte((uint8_t)(y & 0xFF));
+        w.writeInt(z);
+        w.writeInt(data);
+        w.writeBoolean(globalEvent);
+        return w.data();
+    }
+
     // PlayerActionPacket (id=14) client->server
     // Wire: [byte 14][byte action][int x][byte y][int z][byte face]
     bool PacketHandler::ReadPlayerAction(const uint8_t* data, int size,

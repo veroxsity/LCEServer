@@ -104,7 +104,7 @@ namespace LCEServer
         cfg.levelName      = Utf8ToWide(get("level-name", "world"));
         cfg.levelId        = get("level-id", "");
         cfg.levelSeed      = get("level-seed", "");
-        cfg.levelType      = get("level-type", "default");
+        cfg.levelType      = get("level-type", "flat");
         cfg.maxBuildHeight = ParseInt(
             get("max-build-height", std::to_string(LEGACY_WORLD_HEIGHT)),
             LEGACY_WORLD_HEIGHT);

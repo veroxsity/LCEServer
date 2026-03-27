@@ -279,7 +279,8 @@ namespace LCEServer
             conn->onBlockUpdate =
                 [this](Connection* src,
                        int x, int y, int z,
-                       int blockId, int blockData) {
+                       int blockId, int blockData,
+                       int oldBlockId, int oldBlockData) {
                     int cx = x >> 4;
                     int cz = z >> 4;
                     // When a block is broken (blockId==0), send 255 instead of 0.
@@ -291,6 +292,15 @@ namespace LCEServer
                     int wireBlockId = (blockId == 0) ? 255 : blockId;
                     auto pkt = PacketHandler::WriteTileUpdate(
                         x, y, z, wireBlockId, blockData, 0);
+                    std::vector<uint8_t> breakEffectPkt;
+                    bool sendBreakEffect = (blockId == 0 && oldBlockId != 0);
+                    if (sendBreakEffect)
+                    {
+                        int effectData = oldBlockId + ((oldBlockData & 0xFF) << 12);
+                        breakEffectPkt = PacketHandler::WriteLevelEvent(
+                            LevelEventId::DestroyBlockParticles,
+                            x, y, z, effectData, false);
+                    }
                     for (auto& [id, other] : m_connections)
                     {
                         if (!other->IsPlaying())
@@ -298,6 +308,8 @@ namespace LCEServer
                         if (other.get() == src)
                         {
                             other->SendPacket(pkt);
+                            if (sendBreakEffect)
+                                other->SendPacket(breakEffectPkt);
                             continue;
                         }
                         bool vis = other->HasChunkVisible(cx, cz);
@@ -308,6 +320,8 @@ namespace LCEServer
                             vis ? "SENT" : "skip(not loaded)");
                         if (!vis) continue;
                         other->SendPacket(pkt);
+                        if (sendBreakEffect)
+                            other->SendPacket(breakEffectPkt);
                     }
                 };
 

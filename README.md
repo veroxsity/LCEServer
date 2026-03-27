@@ -29,6 +29,7 @@ It speaks the native LCE TCP protocol directly so unmodified legacy clients can 
 - Pre-login and login handshake for protocol `78` and net version `560`
 - World join and spawn flow
 - Chunk streaming
+- Flat-world generation for newly created native worlds
 - Block breaking and placing with update broadcast
 - Health, death, and respawn handling
 - Multiplayer join, leave, and movement broadcasting
@@ -36,7 +37,7 @@ It speaks the native LCE TCP protocol directly so unmodified legacy clients can 
 
 ## Status
 
-LCEServer has a working multiplayer foundation and is usable for active protocol and gameplay testing. Broader gameplay systems, deeper entity support, and inventory behavior are still being expanded.
+LCEServer has a working multiplayer foundation and is usable for active protocol and gameplay testing. Newly generated native worlds are currently flat-only, while broader gameplay systems, deeper entity support, and inventory behavior are still being expanded.
 
 ## Repository Layout
 
