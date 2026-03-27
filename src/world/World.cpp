@@ -120,7 +120,9 @@ namespace LCEServer
             m_seed = ((int64_t)rd() << 32) | rd();
         }
 
-        m_spawnX = 0; m_spawnY = 5; m_spawnZ = 0;
+        m_spawnX = 0;
+        m_spawnY = (m_levelType == "flat") ? 4 : 5;
+        m_spawnZ = 0;
         m_gameTime = 0; m_dayTime = 0;
         m_gameMode = config.gamemode;
         m_difficulty = config.difficulty;
@@ -2115,9 +2117,9 @@ namespace LCEServer
 
     void World::GenerateFlatChunk(ChunkData& chunk)
     {
-        // Flat world: bedrock y=0, dirt y=1-3, grass y=4
+        // Flat world: bedrock y=0, dirt y=1-2, grass y=3
         constexpr int HEIGHT = kChunkStorageHeight;
-        constexpr int YS = 5; // solid layers
+        constexpr int YS = 4; // solid layers
         int totalBlocks = kChunkTotalBlocks;
         int halfBlocks = kChunkTotalNibbles;
 
@@ -2134,8 +2136,8 @@ namespace LCEServer
                 for (int y = 0; y < HEIGHT; y++) {
                     int idx = ChunkBlockIndex(x, z, y);
                     if (y == 0)      chunk.blocks[idx] = 7;  // bedrock
-                    else if (y < 4)  chunk.blocks[idx] = 3;  // dirt
-                    else if (y == 4) chunk.blocks[idx] = 2;  // grass
+                    else if (y < 3)  chunk.blocks[idx] = 3;  // dirt
+                    else if (y == 3) chunk.blocks[idx] = 2;  // grass
                     // else 0 = air (already zeroed)
                 }
             }
