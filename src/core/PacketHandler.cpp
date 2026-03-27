@@ -296,6 +296,21 @@ namespace LCEServer
         return w.data();
     }
 
+    std::vector<uint8_t> PacketHandler::WriteContainerOpen(
+        int8_t containerId, int8_t type, uint8_t size,
+        bool customName, const std::wstring& title)
+    {
+        ByteWriter w;
+        w.writeByte(PacketId::ContainerOpen);
+        w.writeByte(static_cast<uint8_t>(containerId));
+        w.writeByte(static_cast<uint8_t>(type));
+        w.writeByte(size);
+        w.writeBoolean(customName);
+        if (customName)
+            w.writeUtf(title);
+        return w.data();
+    }
+
     // ContainerSetSlotPacket (id=103)
     std::vector<uint8_t> PacketHandler::WriteContainerSetSlot(
         int8_t containerId, int16_t slot, const ItemInstanceData& item)

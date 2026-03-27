@@ -73,6 +73,7 @@ namespace LCEServer
         constexpr int TileUpdate      = 53;
         constexpr int LevelEvent      = 61;
         constexpr int CraftItem       = 150;
+        constexpr int ContainerOpen   = 100;
         constexpr int ContainerClose  = 101;
         constexpr int ContainerSetSlot = 103;
         constexpr int ContainerSetContent = 104;
@@ -137,5 +138,11 @@ namespace LCEServer
     namespace LevelEventId
     {
         constexpr int DestroyBlockParticles = 2001;
+    }
+
+    namespace ContainerType
+    {
+        constexpr int Container = 0;
+        constexpr int Workbench = 1;
     }
 }

@@ -219,6 +219,11 @@ namespace LCEServer
         // SetCarriedItemPacket (id=16): short slot
         static std::vector<uint8_t> WriteSetCarriedItem(int slot);
 
+        // ContainerOpenPacket (id=100): byte containerId, byte type, byte size, bool customName, [title]
+        static std::vector<uint8_t> WriteContainerOpen(
+            int8_t containerId, int8_t type, uint8_t size,
+            bool customName, const std::wstring& title = L"");
+
         // ContainerSetSlotPacket (id=103): byte containerId, short slot, item
         static std::vector<uint8_t> WriteContainerSetSlot(
             int8_t containerId, int16_t slot, const ItemInstanceData& item);

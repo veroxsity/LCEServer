@@ -39,6 +39,51 @@ namespace LCEServer
             }
         }
 
+        ItemInstanceData GetCraftingRemainingItem(int itemId)
+        {
+            switch (itemId)
+            {
+            case 326: // water bucket
+            case 327: // lava bucket
+            case 335: // milk bucket
+                return ItemInstanceData{325, 1, 0}; // empty bucket
+            default:
+                return ItemInstanceData();
+            }
+        }
+
+        bool TryResolvePlacedBlock(int itemId, int itemDamage, int& outBlockId, int& outBlockData)
+        {
+            if (itemId >= 0 && itemId < 256)
+            {
+                outBlockId = itemId;
+                outBlockData = itemDamage & 0xF;
+                return true;
+            }
+
+            switch (itemId)
+            {
+            case 354: // cake
+                outBlockId = 92;
+                outBlockData = 0;
+                return true;
+            case 379: // brewing stand
+                outBlockId = 117;
+                outBlockData = 0;
+                return true;
+            case 380: // cauldron
+                outBlockId = 118;
+                outBlockData = 0;
+                return true;
+            case 390: // flower pot
+                outBlockId = 140;
+                outBlockData = 0;
+                return true;
+            default:
+                return false;
+            }
+        }
+
         int CountInventoryResource(
             const std::array<ItemInstanceData, 36>& inventory,
             int itemId,
@@ -140,6 +185,46 @@ namespace LCEServer
                 return -1;
             }
         }
+
+        int GetFacingFromPlayerYaw(float yRot)
+        {
+            int dir = (static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 3;
+            switch (dir)
+            {
+            case 0: return 2; // Facing::NORTH
+            case 1: return 5; // Facing::EAST
+            case 2: return 3; // Facing::SOUTH
+            default: return 4; // Facing::WEST
+            }
+        }
+
+        int GetHorizontalDirectionFromPlayerYaw(float yRot)
+        {
+            return (static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 3;
+        }
+
+        int GetDoorDirectionFromPlayerYaw(float yRot)
+        {
+            return (static_cast<int>(std::floor(((yRot + 180.0) * 4.0) / 360.0 - 0.5))) & 3;
+        }
+
+        int GetRotatedPillarDataFromFace(int itemDamage, int face)
+        {
+            const int type = itemDamage & 0x3;
+            switch (face)
+            {
+            case 2:
+            case 3:
+                return type | (2 << 2); // FACING_Z
+            case 4:
+            case 5:
+                return type | (1 << 2); // FACING_X
+            case 0:
+            case 1:
+            default:
+                return type; // FACING_Y
+            }
+        }
     }
 
     int64_t Connection::MakeChunkKey(int cx, int cz)
@@ -175,6 +260,22 @@ namespace LCEServer
     {
         if (menuSlot >= 5 && menuSlot <= 8)
             return 8 - menuSlot;
+        return -1;
+    }
+
+    int Connection::InventoryIndexToWorkbenchMenuSlot(int inventoryIndex)
+    {
+        if (inventoryIndex < 0 || inventoryIndex >= 36)
+            return -1;
+        return inventoryIndex < 9 ? (37 + inventoryIndex) : (inventoryIndex + 1);
+    }
+
+    int Connection::WorkbenchMenuSlotToInventoryIndex(int menuSlot)
+    {
+        if (menuSlot >= 10 && menuSlot <= 36)
+            return menuSlot - 1;
+        if (menuSlot >= 37 && menuSlot <= 45)
+            return menuSlot - 37;
         return -1;
     }
 
@@ -342,7 +443,8 @@ namespace LCEServer
                 // Dedicated server currently has no gameplay effect for it.
                 break;
             case PacketId::ContainerClose:
-                // Client notifies container/window close; safe no-op for now.
+                if (m_state == ConnectionState::Playing)
+                    HandleContainerClose(pkt.data(), (int)pkt.size());
                 break;
             case PacketId::SetCreativeModeSlot:
                 // Creative inventory update packet; ignored until inventory sync is implemented.
@@ -814,6 +916,27 @@ namespace LCEServer
 
         SendPacket(PacketHandler::WriteContainerSetContent(0, menuItems));
         SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
+
+        if (m_openContainerType == ContainerType::Workbench)
+            SendWorkbenchSnapshot();
+    }
+
+    void Connection::SendWorkbenchSnapshot()
+    {
+        if (m_openContainerType != ContainerType::Workbench || m_openContainerId <= 0)
+            return;
+
+        std::vector<ItemInstanceData> menuItems(46);
+        for (int inventoryIndex = 0; inventoryIndex < 36; ++inventoryIndex)
+        {
+            int menuSlot = InventoryIndexToWorkbenchMenuSlot(inventoryIndex);
+            if (menuSlot >= 0)
+                menuItems[menuSlot] = m_inventoryItems[inventoryIndex];
+        }
+
+        SendPacket(PacketHandler::WriteContainerSetContent(
+            static_cast<int8_t>(m_openContainerId), menuItems));
+        SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
     }
 
     void Connection::SendInventorySlotUpdate(int inventoryIndex)
@@ -822,6 +945,18 @@ namespace LCEServer
         if (menuSlot < 0) return;
         SendPacket(PacketHandler::WriteContainerSetSlot(
             0, static_cast<int16_t>(menuSlot), m_inventoryItems[inventoryIndex]));
+
+        if (m_openContainerType == ContainerType::Workbench)
+        {
+            int workbenchSlot = InventoryIndexToWorkbenchMenuSlot(inventoryIndex);
+            if (workbenchSlot >= 0)
+            {
+                SendPacket(PacketHandler::WriteContainerSetSlot(
+                    static_cast<int8_t>(m_openContainerId),
+                    static_cast<int16_t>(workbenchSlot),
+                    m_inventoryItems[inventoryIndex]));
+            }
+        }
     }
 
     void Connection::SendArmorSlotUpdate(int armorIndex)
@@ -830,6 +965,45 @@ namespace LCEServer
         if (menuSlot < 0) return;
         SendPacket(PacketHandler::WriteContainerSetSlot(
             0, static_cast<int16_t>(menuSlot), m_armorItems[armorIndex]));
+    }
+
+    void Connection::OpenWorkbenchContainer(int x, int y, int z)
+    {
+        if (m_openContainerType == ContainerType::Workbench)
+            return;
+
+        CloseContainerIfOpen();
+
+        m_openContainerId = m_nextContainerId;
+        m_nextContainerId = (m_nextContainerId % 100) + 1;
+        m_openContainerType = ContainerType::Workbench;
+        m_openWorkbenchX = x;
+        m_openWorkbenchY = y;
+        m_openWorkbenchZ = z;
+
+        SendPacket(PacketHandler::WriteContainerOpen(
+            static_cast<int8_t>(m_openContainerId),
+            static_cast<int8_t>(ContainerType::Workbench),
+            9,
+            false));
+        SendWorkbenchSnapshot();
+
+        Logger::Info("Server",
+            "'%ls' opened workbench at (%d,%d,%d) containerId=%d",
+            m_playerName.c_str(), x, y, z, m_openContainerId);
+    }
+
+    void Connection::CloseContainerIfOpen()
+    {
+        if (m_openContainerId <= 0)
+            return;
+
+        Logger::Info("Server",
+            "'%ls' closed containerId=%d type=%d",
+            m_playerName.c_str(), m_openContainerId, m_openContainerType);
+
+        m_openContainerId = 0;
+        m_openContainerType = -1;
     }
 
     // =============================================================
@@ -1121,6 +1295,108 @@ namespace LCEServer
         if (!PacketHandler::ReadUseItem(data, size, use))
             return;
 
+        if (m_openContainerId > 0)
+            CloseContainerIfOpen();
+
+        if (m_world)
+        {
+            auto sendActualTileState = [this](int x, int y, int z)
+            {
+                if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                    return;
+
+                int blockId = 0;
+                int blockData = 0;
+                ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
+                if (chunk && !chunk->blocks.empty())
+                {
+                    int lx = ((x % 16) + 16) % 16;
+                    int lz = ((z % 16) + 16) % 16;
+                    int idx = ChunkBlockIndex(lx, lz, y);
+                    if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
+                    {
+                        blockId = chunk->blocks[idx];
+                        if (!chunk->data.empty())
+                        {
+                            int nibbleIndex = idx >> 1;
+                            uint8_t packed = chunk->data[nibbleIndex];
+                            blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                        }
+                    }
+                }
+
+                int wireBlockId = (blockId == 0) ? 255 : blockId;
+                SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
+            };
+
+            auto resyncPlacementPrediction = [&]()
+            {
+                sendActualTileState(use.x, use.y, use.z);
+
+                int px = use.x;
+                int py = use.y;
+                int pz = use.z;
+                bool hasPredictedTarget = false;
+
+                if (use.face == -1)
+                {
+                    hasPredictedTarget = true;
+                }
+                else
+                {
+                    static const int dx[] = { 0,  0,  0,  0, -1, 1 };
+                    static const int dy[] = {-1,  1,  0,  0,  0, 0 };
+                    static const int dz[] = { 0,  0, -1,  1,  0, 0 };
+
+                    const int face = use.face & 0xFF;
+                    if (face <= 5)
+                    {
+                        ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
+                        bool clickedReplaceable = false;
+                        if (clickedChunk && !clickedChunk->blocks.empty() &&
+                            use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
+                        {
+                            int lx = ((use.x % 16) + 16) % 16;
+                            int lz = ((use.z % 16) + 16) % 16;
+                            int idx = ChunkBlockIndex(lx, lz, use.y);
+                            if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
+                                clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
+                        }
+
+                        if (!clickedReplaceable)
+                        {
+                            px = use.x + dx[face];
+                            py = use.y + dy[face];
+                            pz = use.z + dz[face];
+                        }
+                        hasPredictedTarget = true;
+                    }
+                }
+
+                if (hasPredictedTarget &&
+                    (px != use.x || py != use.y || pz != use.z))
+                {
+                    sendActualTileState(px, py, pz);
+                }
+            };
+
+            ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
+            if (clickedChunk && !clickedChunk->blocks.empty() &&
+                use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
+            {
+                int lx = ((use.x % 16) + 16) % 16;
+                int lz = ((use.z % 16) + 16) % 16;
+                int idx = ChunkBlockIndex(lx, lz, use.y);
+                if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()) &&
+                    clickedChunk->blocks[idx] == 58)
+                {
+                    resyncPlacementPrediction();
+                    OpenWorkbenchContainer(use.x, use.y, use.z);
+                    return;
+                }
+            }
+        }
+
         const bool isCreative = (m_gameMode == 1);
         ItemInstanceData* selected = nullptr;
         if (m_hotbarSlot >= 0 &&
@@ -1135,6 +1411,8 @@ namespace LCEServer
             {
                 if (selected)
                     SendInventorySlotUpdate(m_hotbarSlot);
+                if (m_world)
+                    SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
                 return;
             }
 
@@ -1143,16 +1421,126 @@ namespace LCEServer
                 selected->aux != use.itemDamage)
             {
                 SendInventorySlotUpdate(m_hotbarSlot);
+                if (m_world)
+                {
+                    auto sendActualTileState = [this](int x, int y, int z)
+                    {
+                        if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                            return;
+
+                        int blockId = 0;
+                        int blockData = 0;
+                        ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
+                        if (chunk && !chunk->blocks.empty())
+                        {
+                            int lx = ((x % 16) + 16) % 16;
+                            int lz = ((z % 16) + 16) % 16;
+                            int idx = ChunkBlockIndex(lx, lz, y);
+                            if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
+                            {
+                                blockId = chunk->blocks[idx];
+                                if (!chunk->data.empty())
+                                {
+                                    int nibbleIndex = idx >> 1;
+                                    uint8_t packed = chunk->data[nibbleIndex];
+                                    blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                                }
+                            }
+                        }
+
+                        int wireBlockId = (blockId == 0) ? 255 : blockId;
+                        SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
+                    };
+                    sendActualTileState(use.x, use.y, use.z);
+                }
                 return;
             }
         }
 
         // itemId < 0 means no item / air - nothing to place
         if (use.itemId < 0) return;
-        // Only block items have id < 256
-        if (use.itemId >= 256) return;
 
         if (!m_world) return;
+
+        auto sendActualTileState = [this](int x, int y, int z)
+        {
+            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                return;
+
+            int blockId = 0;
+            int blockData = 0;
+            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
+            if (chunk && !chunk->blocks.empty())
+            {
+                int lx = ((x % 16) + 16) % 16;
+                int lz = ((z % 16) + 16) % 16;
+                int idx = ChunkBlockIndex(lx, lz, y);
+                if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
+                {
+                    blockId = chunk->blocks[idx];
+                    if (!chunk->data.empty())
+                    {
+                        int nibbleIndex = idx >> 1;
+                        uint8_t packed = chunk->data[nibbleIndex];
+                        blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                    }
+                }
+            }
+
+            int wireBlockId = (blockId == 0) ? 255 : blockId;
+            SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
+        };
+
+        auto resyncPlacementPrediction = [&]()
+        {
+            sendActualTileState(use.x, use.y, use.z);
+
+            int px = use.x;
+            int py = use.y;
+            int pz = use.z;
+            bool hasPredictedTarget = false;
+
+            if (use.face == -1)
+            {
+                hasPredictedTarget = true;
+            }
+            else
+            {
+                static const int dx[] = { 0,  0,  0,  0, -1, 1 };
+                static const int dy[] = {-1,  1,  0,  0,  0, 0 };
+                static const int dz[] = { 0,  0, -1,  1,  0, 0 };
+
+                int face = use.face & 0xFF;
+                if (face <= 5)
+                {
+                    ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
+                    bool clickedReplaceable = false;
+                    if (clickedChunk && !clickedChunk->blocks.empty() &&
+                        use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
+                    {
+                        int lx = ((use.x % 16) + 16) % 16;
+                        int lz = ((use.z % 16) + 16) % 16;
+                        int idx = ChunkBlockIndex(lx, lz, use.y);
+                        if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
+                            clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
+                    }
+
+                    if (!clickedReplaceable)
+                    {
+                        px = use.x + dx[face];
+                        py = use.y + dy[face];
+                        pz = use.z + dz[face];
+                    }
+                    hasPredictedTarget = true;
+                }
+            }
+
+            if (hasPredictedTarget &&
+                (px != use.x || py != use.y || pz != use.z))
+            {
+                sendActualTileState(px, py, pz);
+            }
+        };
 
         int px, py, pz;
 
@@ -1168,7 +1556,11 @@ namespace LCEServer
             static const int dz[] = { 0,  0, -1,  1,  0, 0 };
 
             int face = use.face & 0xFF;
-            if (face > 5) return;
+            if (face > 5)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
 
             // Check if the clicked block itself is replaceable.
             // If so, place INTO it rather than adjacent to it —
@@ -1196,7 +1588,215 @@ namespace LCEServer
             }
         }
 
-        if (py < 0 || py >= LEGACY_WORLD_HEIGHT) return;
+        auto getWorldBlockId = [&](int x, int y, int z) -> int
+        {
+            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                return 0;
+
+            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
+            if (!chunk || chunk->blocks.empty())
+                return 0;
+
+            int lx = ((x % 16) + 16) % 16;
+            int lz = ((z % 16) + 16) % 16;
+            int idx = ChunkBlockIndex(lx, lz, y);
+            if (idx < 0 || idx >= static_cast<int>(chunk->blocks.size()))
+                return 0;
+            return chunk->blocks[idx];
+        };
+
+        auto getWorldBlockData = [&](int x, int y, int z) -> int
+        {
+            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                return 0;
+
+            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
+            if (!chunk || chunk->data.empty())
+                return 0;
+
+            int lx = ((x % 16) + 16) % 16;
+            int lz = ((z % 16) + 16) % 16;
+            int idx = ChunkBlockIndex(lx, lz, y);
+            if (idx < 0 || idx >= kChunkTotalBlocks)
+                return 0;
+            int nibbleIndex = idx >> 1;
+            uint8_t packed = chunk->data[nibbleIndex];
+            return (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+        };
+
+        auto canReplaceAt = [&](int x, int y, int z) -> bool
+        {
+            int blockId = getWorldBlockId(x, y, z);
+            return blockId == 0 || IsReplaceableBlock(blockId);
+        };
+
+        auto isTopSolidBlocking = [&](int x, int y, int z) -> bool
+        {
+            int blockId = getWorldBlockId(x, y, z);
+            return blockId != 0 && !IsReplaceableBlock(blockId);
+        };
+
+        auto consumeSelectedPlacementItem = [&]()
+        {
+            if (isCreative || !selected)
+                return;
+
+            if (selected->count > 1)
+                selected->count -= 1;
+            else
+                *selected = ItemInstanceData();
+
+            SendInventorySlotUpdate(m_hotbarSlot);
+        };
+
+        auto notifyBlockPlaced = [&](int x, int y, int z, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+        {
+            if (onBlockUpdate)
+                onBlockUpdate(this, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
+        };
+
+        if (use.itemId == 355) // bed
+        {
+            if (use.face != 1 || py < 0 || py >= LEGACY_WORLD_HEIGHT)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+
+            const int dir = GetHorizontalDirectionFromPlayerYaw(m_yRot);
+            int xra = 0;
+            int zra = 0;
+            if (dir == 0) zra = 1;
+            else if (dir == 1) xra = -1;
+            else if (dir == 2) zra = -1;
+            else xra = 1;
+
+            const int hx = px + xra;
+            const int hy = py;
+            const int hz = pz + zra;
+            if (hy < 0 || hy >= LEGACY_WORLD_HEIGHT ||
+                !canReplaceAt(px, py, pz) ||
+                !canReplaceAt(hx, hy, hz) ||
+                !isTopSolidBlocking(px, py - 1, pz) ||
+                !isTopSolidBlocking(hx, hy - 1, hz))
+            {
+                resyncPlacementPrediction();
+                sendActualTileState(hx, hy, hz);
+                return;
+            }
+
+            const int oldFootId = getWorldBlockId(px, py, pz);
+            const int oldFootData = getWorldBlockData(px, py, pz);
+            const int oldHeadId = getWorldBlockId(hx, hy, hz);
+            const int oldHeadData = getWorldBlockData(hx, hy, hz);
+
+            if (!m_world->SetBlock(px, py, pz, 26, dir) ||
+                !m_world->SetBlock(hx, hy, hz, 26, dir | 0x8))
+            {
+                resyncPlacementPrediction();
+                sendActualTileState(hx, hy, hz);
+                return;
+            }
+
+            Logger::Info("Server", "'%ls' placed bed at (%d,%d,%d) facing=%d",
+                m_playerName.c_str(), px, py, pz, dir);
+
+            consumeSelectedPlacementItem();
+            notifyBlockPlaced(px, py, pz, 26, dir, oldFootId, oldFootData);
+            notifyBlockPlaced(hx, hy, hz, 26, dir | 0x8, oldHeadId, oldHeadData);
+            return;
+        }
+
+        if (use.itemId == 324 || use.itemId == 330) // wooden/iron door
+        {
+            if (use.face != 1 || py < 0 || py >= LEGACY_WORLD_HEIGHT - 1)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+
+            const int doorBlockId = (use.itemId == 324) ? 64 : 71;
+            if (!isTopSolidBlocking(px, py - 1, pz) ||
+                !canReplaceAt(px, py, pz) ||
+                !canReplaceAt(px, py + 1, pz))
+            {
+                resyncPlacementPrediction();
+                sendActualTileState(px, py + 1, pz);
+                return;
+            }
+
+            const int dir = GetDoorDirectionFromPlayerYaw(m_yRot);
+            int xra = 0;
+            int zra = 0;
+            if (dir == 0) zra = 1;
+            else if (dir == 1) xra = -1;
+            else if (dir == 2) zra = -1;
+            else xra = 1;
+
+            const int solidLeft =
+                (isTopSolidBlocking(px - xra, py, pz - zra) ? 1 : 0) +
+                (isTopSolidBlocking(px - xra, py + 1, pz - zra) ? 1 : 0);
+            const int solidRight =
+                (isTopSolidBlocking(px + xra, py, pz + zra) ? 1 : 0) +
+                (isTopSolidBlocking(px + xra, py + 1, pz + zra) ? 1 : 0);
+
+            const bool doorLeft =
+                (getWorldBlockId(px - xra, py, pz - zra) == doorBlockId) ||
+                (getWorldBlockId(px - xra, py + 1, pz - zra) == doorBlockId);
+            const bool doorRight =
+                (getWorldBlockId(px + xra, py, pz + zra) == doorBlockId) ||
+                (getWorldBlockId(px + xra, py + 1, pz + zra) == doorBlockId);
+
+            bool flip = false;
+            if (doorLeft && !doorRight)
+                flip = true;
+            else if (solidRight > solidLeft)
+                flip = true;
+
+            const int oldLowerId = getWorldBlockId(px, py, pz);
+            const int oldLowerData = getWorldBlockData(px, py, pz);
+            const int oldUpperId = getWorldBlockId(px, py + 1, pz);
+            const int oldUpperData = getWorldBlockData(px, py + 1, pz);
+
+            if (!m_world->SetBlock(px, py, pz, doorBlockId, dir) ||
+                !m_world->SetBlock(px, py + 1, pz, doorBlockId, 0x8 | (flip ? 1 : 0)))
+            {
+                resyncPlacementPrediction();
+                sendActualTileState(px, py + 1, pz);
+                return;
+            }
+
+            Logger::Info("Server", "'%ls' placed door %d at (%d,%d,%d) dir=%d flip=%d",
+                m_playerName.c_str(), doorBlockId, px, py, pz, dir, flip ? 1 : 0);
+
+            consumeSelectedPlacementItem();
+            notifyBlockPlaced(px, py, pz, doorBlockId, dir, oldLowerId, oldLowerData);
+            notifyBlockPlaced(px, py + 1, pz, doorBlockId, 0x8 | (flip ? 1 : 0), oldUpperId, oldUpperData);
+            return;
+        }
+
+        int placedBlockId = 0;
+        int placedBlockData = 0;
+        if (!TryResolvePlacedBlock(use.itemId, use.itemDamage, placedBlockId, placedBlockData))
+        {
+            resyncPlacementPrediction();
+            return;
+        }
+
+        if (py < 0 || py >= LEGACY_WORLD_HEIGHT)
+        {
+            resyncPlacementPrediction();
+            return;
+        }
+
+        if (placedBlockId == 17) // logs
+        {
+            placedBlockData = GetRotatedPillarDataFromFace(use.itemDamage, use.face);
+        }
+        else if (placedBlockId == 54 || placedBlockId == 146 || placedBlockId == 61 || placedBlockId == 62)
+        {
+            placedBlockData = GetFacingFromPlayerYaw(m_yRot);
+        }
 
         // Don't overwrite a non-replaceable solid block
         ChunkData* destChunk = m_world->GetChunk(px >> 4, pz >> 4);
@@ -1218,16 +1818,23 @@ namespace LCEServer
                     oldBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
                 }
                 if (existing != 0 && !IsReplaceableBlock(existing))
+                {
+                    resyncPlacementPrediction();
                     return;
+                }
             }
         }
 
         ChunkData* chunk = m_world->SetBlock(px, py, pz,
-            use.itemId, use.itemDamage & 0xF);
-        if (!chunk) return;
+            placedBlockId, placedBlockData);
+        if (!chunk)
+        {
+            resyncPlacementPrediction();
+            return;
+        }
 
         Logger::Info("Server", "'%ls' placed block %d at (%d,%d,%d)",
-            m_playerName.c_str(), use.itemId, px, py, pz);
+            m_playerName.c_str(), placedBlockId, px, py, pz);
 
         if (!isCreative && selected)
         {
@@ -1243,7 +1850,7 @@ namespace LCEServer
         }
 
         if (onBlockUpdate)
-            onBlockUpdate(this, px, py, pz, use.itemId, use.itemDamage & 0xF, oldBlockId, oldBlockData);
+            onBlockUpdate(this, px, py, pz, placedBlockId, placedBlockData, oldBlockId, oldBlockData);
     }
 
     // ---------------------------------------------------------------
@@ -1273,7 +1880,11 @@ namespace LCEServer
         if (!PacketHandler::ReadContainerClick(data, size, click))
             return;
 
-        if (click.containerId != 0)
+        const bool isPlayerInventory = (click.containerId == 0);
+        const bool isWorkbench = (m_openContainerType == ContainerType::Workbench &&
+            click.containerId == m_openContainerId);
+
+        if (!isPlayerInventory && !isWorkbench)
         {
             SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
             SendInventorySnapshot();
@@ -1325,7 +1936,48 @@ namespace LCEServer
             return;
         }
 
-        ItemInstanceData slotItem = GetMenuSlotItem(click.slotNum);
+        auto getSlotItem = [&](int slotNum) -> ItemInstanceData
+        {
+            if (isWorkbench)
+            {
+                int inventoryIndex = WorkbenchMenuSlotToInventoryIndex(slotNum);
+                if (inventoryIndex >= 0)
+                    return m_inventoryItems[inventoryIndex];
+                return ItemInstanceData();
+            }
+            return GetMenuSlotItem(slotNum);
+        };
+
+        auto setSlotItem = [&](int slotNum, const ItemInstanceData& item)
+        {
+            if (isWorkbench)
+            {
+                int inventoryIndex = WorkbenchMenuSlotToInventoryIndex(slotNum);
+                if (inventoryIndex >= 0)
+                    m_inventoryItems[inventoryIndex] = item;
+                return;
+            }
+            SetMenuSlotItem(slotNum, item);
+        };
+
+        auto slotToInventoryIndex = [&](int slotNum) -> int
+        {
+            return isWorkbench ? WorkbenchMenuSlotToInventoryIndex(slotNum) : MenuSlotToInventoryIndex(slotNum);
+        };
+
+        auto slotToArmorIndex = [&](int slotNum) -> int
+        {
+            return isWorkbench ? -1 : MenuSlotToArmorIndex(slotNum);
+        };
+
+        if (isWorkbench && click.slotNum >= 0 && slotToInventoryIndex(click.slotNum) < 0)
+        {
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
+            SendWorkbenchSnapshot();
+            return;
+        }
+
+        ItemInstanceData slotItem = getSlotItem(click.slotNum);
         ItemInstanceData clickedResult = slotItem;
         if (!ItemsMatch(clickedResult, click.item))
         {
@@ -1342,7 +1994,7 @@ namespace LCEServer
             auto moveIntoRange = [&](int startSlot, int endSlotExclusive) -> bool
             {
                 bool moved = false;
-                ItemInstanceData moving = GetMenuSlotItem(click.slotNum);
+                ItemInstanceData moving = getSlotItem(click.slotNum);
                 if (moving.IsEmpty())
                     return false;
 
@@ -1351,7 +2003,7 @@ namespace LCEServer
                     if (slot == click.slotNum)
                         continue;
 
-                    ItemInstanceData target = GetMenuSlotItem(slot);
+                    ItemInstanceData target = getSlotItem(slot);
                     if (target.IsEmpty() || target.id != moving.id || target.aux != moving.aux || target.count >= 64)
                         continue;
 
@@ -1359,7 +2011,7 @@ namespace LCEServer
                     int transfer = moving.count < space ? moving.count : space;
                     target.count = static_cast<uint8_t>(target.count + transfer);
                     moving.count = static_cast<uint8_t>(moving.count - transfer);
-                    SetMenuSlotItem(slot, target);
+                    setSlotItem(slot, target);
                     moved = true;
                 }
 
@@ -1368,40 +2020,42 @@ namespace LCEServer
                     if (slot == click.slotNum)
                         continue;
 
-                    ItemInstanceData target = GetMenuSlotItem(slot);
+                    ItemInstanceData target = getSlotItem(slot);
                     if (!target.IsEmpty())
                         continue;
 
-                    SetMenuSlotItem(slot, moving);
+                    setSlotItem(slot, moving);
                     moving = ItemInstanceData();
                     moved = true;
                 }
 
                 if (moved)
-                    SetMenuSlotItem(click.slotNum, moving);
+                    setSlotItem(click.slotNum, moving);
 
                 return moved;
             };
 
-            int inventoryIndex = MenuSlotToInventoryIndex(click.slotNum);
-            int armorIndex = MenuSlotToArmorIndex(click.slotNum);
+            int inventoryIndex = slotToInventoryIndex(click.slotNum);
+            int armorIndex = slotToArmorIndex(click.slotNum);
 
             if (inventoryIndex >= 0)
             {
-                int armorMenuSlot = GetArmorMenuSlotForItemId(sourceItem.id);
-                if (armorMenuSlot >= 0 && GetMenuSlotItem(armorMenuSlot).IsEmpty())
+                int armorMenuSlot = isWorkbench ? -1 : GetArmorMenuSlotForItemId(sourceItem.id);
+                if (armorMenuSlot >= 0 && getSlotItem(armorMenuSlot).IsEmpty())
                 {
-                    SetMenuSlotItem(armorMenuSlot, sourceItem);
-                    SetMenuSlotItem(click.slotNum, ItemInstanceData());
+                    setSlotItem(armorMenuSlot, sourceItem);
+                    setSlotItem(click.slotNum, ItemInstanceData());
                     changed = true;
                 }
-                else if (click.slotNum >= 9 && click.slotNum < 36)
+                else if ((isWorkbench && click.slotNum >= 10 && click.slotNum < 37) ||
+                         (!isWorkbench && click.slotNum >= 9 && click.slotNum < 36))
                 {
-                    changed = moveIntoRange(36, 45);
+                    changed = moveIntoRange(isWorkbench ? 37 : 36, isWorkbench ? 46 : 45);
                 }
-                else if (click.slotNum >= 36 && click.slotNum < 45)
+                else if ((isWorkbench && click.slotNum >= 37 && click.slotNum < 46) ||
+                         (!isWorkbench && click.slotNum >= 36 && click.slotNum < 45))
                 {
-                    changed = moveIntoRange(9, 36);
+                    changed = moveIntoRange(isWorkbench ? 10 : 9, isWorkbench ? 37 : 36);
                 }
             }
             else if (armorIndex >= 0)
@@ -1425,7 +2079,7 @@ namespace LCEServer
                 int moveCount = (click.buttonNum == 0) ? m_carriedItem.count : 1;
                 ItemInstanceData placed = m_carriedItem;
                 placed.count = static_cast<uint8_t>(moveCount);
-                SetMenuSlotItem(click.slotNum, placed);
+                setSlotItem(click.slotNum, placed);
                 changedSlot = true;
 
                 if (m_carriedItem.count > moveCount)
@@ -1444,7 +2098,7 @@ namespace LCEServer
             if (click.buttonNum == 0)
             {
                 m_carriedItem = slotItem;
-                SetMenuSlotItem(click.slotNum, ItemInstanceData());
+                setSlotItem(click.slotNum, ItemInstanceData());
             }
             else
             {
@@ -1454,11 +2108,11 @@ namespace LCEServer
                 if (slotItem.count > takeCount)
                 {
                     slotItem.count = static_cast<uint8_t>(slotItem.count - takeCount);
-                    SetMenuSlotItem(click.slotNum, slotItem);
+                    setSlotItem(click.slotNum, slotItem);
                 }
                 else
                 {
-                    SetMenuSlotItem(click.slotNum, ItemInstanceData());
+                    setSlotItem(click.slotNum, ItemInstanceData());
                 }
             }
             changedSlot = true;
@@ -1476,7 +2130,7 @@ namespace LCEServer
             if (moveCount > 0)
             {
                 slotItem.count = static_cast<uint8_t>(slotItem.count + moveCount);
-                SetMenuSlotItem(click.slotNum, slotItem);
+                setSlotItem(click.slotNum, slotItem);
                 changedSlot = true;
 
                 if (m_carriedItem.count > moveCount)
@@ -1493,7 +2147,7 @@ namespace LCEServer
         else if (click.buttonNum == 0)
         {
             ItemInstanceData temp = slotItem;
-            SetMenuSlotItem(click.slotNum, m_carriedItem);
+            setSlotItem(click.slotNum, m_carriedItem);
             m_carriedItem = temp;
             changedSlot = true;
             changedCarried = true;
@@ -1503,12 +2157,12 @@ namespace LCEServer
 
         if (changedSlot)
         {
-            int inventoryIndex = MenuSlotToInventoryIndex(click.slotNum);
+            int inventoryIndex = slotToInventoryIndex(click.slotNum);
             if (inventoryIndex >= 0)
                 SendInventorySlotUpdate(inventoryIndex);
             else
             {
-                int armorIndex = MenuSlotToArmorIndex(click.slotNum);
+                int armorIndex = slotToArmorIndex(click.slotNum);
                 if (armorIndex >= 0)
                     SendArmorSlotUpdate(armorIndex);
             }
@@ -1521,6 +2175,16 @@ namespace LCEServer
     {
         (void)data;
         (void)size;
+    }
+
+    void Connection::HandleContainerClose(const uint8_t* data, int size)
+    {
+        if (size < 2)
+            return;
+
+        int containerId = static_cast<int>(data[1]);
+        if (containerId == m_openContainerId)
+            CloseContainerIfOpen();
     }
 
     void Connection::HandleCraftItem(const uint8_t* data, int size)
@@ -1575,6 +2239,17 @@ namespace LCEServer
             }
         }
 
+        std::vector<ItemInstanceData> remainders;
+        for (const CraftIngredientSpec& ingredient : recipe->ingredients)
+        {
+            ItemInstanceData remainder = GetCraftingRemainingItem(ingredient.id);
+            if (remainder.IsEmpty())
+                continue;
+
+            remainder.count = static_cast<uint8_t>(ingredient.count);
+            remainders.push_back(remainder);
+        }
+
         if (!TryInsertInventoryItem(craftedInventory, recipe->result))
         {
             Logger::Info("Server",
@@ -1586,6 +2261,22 @@ namespace LCEServer
                 recipe->result.count);
             SendInventorySnapshot();
             return;
+        }
+
+        for (const ItemInstanceData& remainder : remainders)
+        {
+            if (!TryInsertInventoryItem(craftedInventory, remainder))
+            {
+                Logger::Info("Server",
+                    "'%ls' had no room for CraftItem recipe=%d remainder=%d:%d x%d; resyncing inventory",
+                    m_playerName.c_str(),
+                    craft.recipe,
+                    remainder.id,
+                    remainder.aux,
+                    remainder.count);
+                SendInventorySnapshot();
+                return;
+            }
         }
 
         m_inventoryItems = craftedInventory;

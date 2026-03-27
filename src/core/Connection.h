@@ -159,6 +159,7 @@ namespace LCEServer
         void HandleSetCarriedItem(const uint8_t* data, int size);
         void HandleContainerClick(const uint8_t* data, int size);
         void HandleContainerAck(const uint8_t* data, int size);
+        void HandleContainerClose(const uint8_t* data, int size);
         void HandleCraftItem(const uint8_t* data, int size);
         void HandleAnimate(const uint8_t* data, int size);
         void HandlePlayerCommand(const uint8_t* data, int size);
@@ -168,8 +169,11 @@ namespace LCEServer
         void SendLoginResponse();
         void SendSpawnSequence();
         void SendInventorySnapshot();
+        void SendWorkbenchSnapshot();
         void SendInventorySlotUpdate(int inventoryIndex);
         void SendArmorSlotUpdate(int armorIndex);
+        void OpenWorkbenchContainer(int x, int y, int z);
+        void CloseContainerIfOpen();
         void SendSpawnChunks();
         void StreamChunksAround(int centerCX, int centerCZ, bool fullResync);
         void DrainChunkQueue();
@@ -178,6 +182,8 @@ namespace LCEServer
         static int ArmorIndexToMenuSlot(int armorIndex);
         static int MenuSlotToInventoryIndex(int menuSlot);
         static int MenuSlotToArmorIndex(int menuSlot);
+        static int InventoryIndexToWorkbenchMenuSlot(int inventoryIndex);
+        static int WorkbenchMenuSlotToInventoryIndex(int menuSlot);
         ItemInstanceData GetMenuSlotItem(int menuSlot) const;
         void SetMenuSlotItem(int menuSlot, const ItemInstanceData& item);
 
@@ -202,6 +208,12 @@ namespace LCEServer
         std::array<ItemInstanceData, 36> m_inventoryItems = {};
         std::array<ItemInstanceData, 4>  m_armorItems = {};
         ItemInstanceData    m_carriedItem = {};
+        int                 m_openContainerId = 0;
+        int                 m_openContainerType = -1;
+        int                 m_openWorkbenchX = 0;
+        int                 m_openWorkbenchY = 0;
+        int                 m_openWorkbenchZ = 0;
+        int                 m_nextContainerId = 1;
         int                 m_lastChunkX = INT32_MIN;
         int                 m_lastChunkZ = INT32_MIN;
         int                 m_chunkRadius = 4; // set from config on construction
