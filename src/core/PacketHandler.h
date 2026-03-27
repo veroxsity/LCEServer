@@ -219,6 +219,18 @@ namespace LCEServer
         // SetCarriedItemPacket (id=16): short slot
         static std::vector<uint8_t> WriteSetCarriedItem(int slot);
 
+        // ContainerSetSlotPacket (id=103): byte containerId, short slot, item
+        static std::vector<uint8_t> WriteContainerSetSlot(
+            int8_t containerId, int16_t slot, const ItemInstanceData& item);
+
+        // ContainerSetContentPacket (id=104): byte containerId, short count, items...
+        static std::vector<uint8_t> WriteContainerSetContent(
+            int8_t containerId, const std::vector<ItemInstanceData>& items);
+
+        // ContainerAckPacket (id=106): byte containerId, short uid, byte accepted
+        static std::vector<uint8_t> WriteContainerAck(
+            int8_t containerId, int16_t uid, bool accepted);
+
         // SetTimePacket (id=4): long gameTime, long dayTime
         static std::vector<uint8_t> WriteSetTime(
             int64_t gameTime, int64_t dayTime);
@@ -323,6 +335,24 @@ namespace LCEServer
         };
         static bool ReadUseItem(const uint8_t* data, int size,
                                 UseItemData& out);
+
+        struct ContainerClickData {
+            int8_t containerId = 0;
+            int16_t slotNum = 0;
+            int8_t buttonNum = 0;
+            int16_t uid = 0;
+            int8_t clickType = 0;
+            ItemInstanceData item;
+        };
+        static bool ReadContainerClick(const uint8_t* data, int size,
+                                       ContainerClickData& out);
+
+        struct CraftItemData {
+            int16_t uid = 0;
+            int32_t recipe = -1;
+        };
+        static bool ReadCraftItem(const uint8_t* data, int size,
+                                  CraftItemData& out);
 
         // Read MovePlayerPacket variants (ids 10, 11, 12, 13)
         struct MovePlayerData {

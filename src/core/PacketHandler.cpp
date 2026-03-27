@@ -6,6 +6,54 @@
 
 namespace LCEServer
 {
+    namespace
+    {
+        void WriteItemInstance(ByteWriter& w, const ItemInstanceData& item)
+        {
+            if (item.IsEmpty())
+            {
+                w.writeShort(-1);
+                return;
+            }
+
+            w.writeShort(item.id);
+            w.writeByte(item.count);
+            w.writeShort(item.aux);
+            // Native LCE packets always include an NBT blob after the item.
+            // The dedicated server does not maintain item NBT yet, so send "no tag".
+            w.writeShort(-1);
+        }
+
+        bool ReadItemInstance(ByteReader& r, ItemInstanceData& out)
+        {
+            if (!r.hasRemaining(2))
+                return false;
+
+            int16_t id = r.readShort();
+            if (id < 0)
+            {
+                out = ItemInstanceData();
+                return true;
+            }
+
+            if (!r.hasRemaining(1 + 2 + 2))
+                return false;
+
+            out.id = id;
+            out.count = r.readByte();
+            out.aux = r.readShort();
+
+            int16_t nbtSize = r.readShort();
+            if (nbtSize > 0)
+            {
+                if (!r.hasRemaining(nbtSize))
+                    return false;
+                r.skip(nbtSize);
+            }
+            return true;
+        }
+    }
+
     int PacketHandler::GetPacketId(const uint8_t* data, int size)
     {
         if (size < 1) return -1;
@@ -245,6 +293,43 @@ namespace LCEServer
         ByteWriter w;
         w.writeByte(PacketId::SetCarriedItem);
         w.writeShort((int16_t)slot);
+        return w.data();
+    }
+
+    // ContainerSetSlotPacket (id=103)
+    std::vector<uint8_t> PacketHandler::WriteContainerSetSlot(
+        int8_t containerId, int16_t slot, const ItemInstanceData& item)
+    {
+        ByteWriter w;
+        w.writeByte(PacketId::ContainerSetSlot);
+        w.writeByte(static_cast<uint8_t>(containerId));
+        w.writeShort(slot);
+        WriteItemInstance(w, item);
+        return w.data();
+    }
+
+    // ContainerSetContentPacket (id=104)
+    std::vector<uint8_t> PacketHandler::WriteContainerSetContent(
+        int8_t containerId, const std::vector<ItemInstanceData>& items)
+    {
+        ByteWriter w;
+        w.writeByte(PacketId::ContainerSetContent);
+        w.writeByte(static_cast<uint8_t>(containerId));
+        w.writeShort(static_cast<int16_t>(items.size()));
+        for (const ItemInstanceData& item : items)
+            WriteItemInstance(w, item);
+        return w.data();
+    }
+
+    // ContainerAckPacket (id=106)
+    std::vector<uint8_t> PacketHandler::WriteContainerAck(
+        int8_t containerId, int16_t uid, bool accepted)
+    {
+        ByteWriter w;
+        w.writeByte(PacketId::ContainerAck);
+        w.writeByte(static_cast<uint8_t>(containerId));
+        w.writeShort(uid);
+        w.writeByte(accepted ? 1 : 0);
         return w.data();
     }
 
@@ -738,7 +823,7 @@ namespace LCEServer
     //       [short itemId, if >=0: byte count + short damage]
     //       [byte clickX/16][byte clickY/16][byte clickZ/16]
     bool PacketHandler::ReadUseItem(const uint8_t* data, int size,
-                                     UseItemData& out)
+                                    UseItemData& out)
     {
         if (size < 8) return false;
         ByteReader r(data + 1, size - 1);
@@ -761,6 +846,33 @@ namespace LCEServer
             out.clickY = (float)r.readByte() / 16.0f;
             out.clickZ = (float)r.readByte() / 16.0f;
         }
+        return true;
+    }
+
+    bool PacketHandler::ReadContainerClick(const uint8_t* data, int size,
+                                           ContainerClickData& out)
+    {
+        if (size < 1 + 1 + 2 + 1 + 2 + 1 + 2)
+            return false;
+
+        ByteReader r(data + 1, size - 1);
+        out.containerId = static_cast<int8_t>(r.readByte());
+        out.slotNum = r.readShort();
+        out.buttonNum = static_cast<int8_t>(r.readByte());
+        out.uid = r.readShort();
+        out.clickType = static_cast<int8_t>(r.readByte());
+        return ReadItemInstance(r, out.item);
+    }
+
+    bool PacketHandler::ReadCraftItem(const uint8_t* data, int size,
+                                      CraftItemData& out)
+    {
+        if (size < 1 + 2 + 4)
+            return false;
+
+        ByteReader r(data + 1, size - 1);
+        out.uid = r.readShort();
+        out.recipe = r.readInt();
         return true;
     }
 

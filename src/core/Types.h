@@ -17,6 +17,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <array>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,3 +27,18 @@
 #include <algorithm>
 #include <chrono>
 #include <cassert>
+
+namespace LCEServer
+{
+    struct ItemInstanceData
+    {
+        int16_t id = -1;
+        uint8_t count = 0;
+        int16_t aux = 0;
+
+        bool IsEmpty() const
+        {
+            return id < 0 || count == 0;
+        }
+    };
+}

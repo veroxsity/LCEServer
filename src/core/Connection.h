@@ -95,6 +95,7 @@ namespace LCEServer
         int   GetGameMode() const { return m_gameMode; }
         void  SetGameMode(int mode) { m_gameMode = mode; }
         void  ApplyDamage(float amount);
+        bool  GiveItem(int itemId, int amount, int aux = 0);
 
         // Send SetHealth to this client
         void SendSetHealth(float health, int16_t food = 20, float sat = 5.0f);
@@ -156,6 +157,9 @@ namespace LCEServer
         void HandlePlayerAction(const uint8_t* data, int size);
         void HandleUseItem(const uint8_t* data, int size);
         void HandleSetCarriedItem(const uint8_t* data, int size);
+        void HandleContainerClick(const uint8_t* data, int size);
+        void HandleContainerAck(const uint8_t* data, int size);
+        void HandleCraftItem(const uint8_t* data, int size);
         void HandleAnimate(const uint8_t* data, int size);
         void HandlePlayerCommand(const uint8_t* data, int size);
         void HandleRespawn(const uint8_t* data, int size);
@@ -163,10 +167,19 @@ namespace LCEServer
         void SendPreLoginResponse();
         void SendLoginResponse();
         void SendSpawnSequence();
+        void SendInventorySnapshot();
+        void SendInventorySlotUpdate(int inventoryIndex);
+        void SendArmorSlotUpdate(int armorIndex);
         void SendSpawnChunks();
         void StreamChunksAround(int centerCX, int centerCZ, bool fullResync);
         void DrainChunkQueue();
         static int64_t MakeChunkKey(int cx, int cz);
+        static int InventoryIndexToMenuSlot(int inventoryIndex);
+        static int ArmorIndexToMenuSlot(int armorIndex);
+        static int MenuSlotToInventoryIndex(int menuSlot);
+        static int MenuSlotToArmorIndex(int menuSlot);
+        ItemInstanceData GetMenuSlotItem(int menuSlot) const;
+        void SetMenuSlotItem(int menuSlot, const ItemInstanceData& item);
 
         uint8_t             m_smallId;
         TcpLayer*           m_tcp;
@@ -186,6 +199,9 @@ namespace LCEServer
         double              m_x = 0, m_y = 0, m_z = 0;
         float               m_yRot = 0, m_xRot = 0;
         int                 m_hotbarSlot = 0; // updated by SetCarriedItem C->S (id=16)
+        std::array<ItemInstanceData, 36> m_inventoryItems = {};
+        std::array<ItemInstanceData, 4>  m_armorItems = {};
+        ItemInstanceData    m_carriedItem = {};
         int                 m_lastChunkX = INT32_MIN;
         int                 m_lastChunkZ = INT32_MIN;
         int                 m_chunkRadius = 4; // set from config on construction

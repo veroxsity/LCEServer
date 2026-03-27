@@ -12,12 +12,95 @@ namespace LCEServer
     namespace
     {
         constexpr double kSpawnFeetEpsilon = 0.1;
+
+        bool ItemsMatch(const ItemInstanceData& a, const ItemInstanceData& b)
+        {
+            if (a.IsEmpty() && b.IsEmpty())
+                return true;
+            return a.id == b.id && a.count == b.count && a.aux == b.aux;
+        }
+
+        int GetArmorMenuSlotForItemId(int itemId)
+        {
+            switch (itemId)
+            {
+            case 298: case 302: case 306: case 310: case 314:
+                return 5;
+            case 299: case 303: case 307: case 311: case 315:
+                return 6;
+            case 300: case 304: case 308: case 312: case 316:
+                return 7;
+            case 301: case 305: case 309: case 313: case 317:
+                return 8;
+            default:
+                return -1;
+            }
+        }
     }
 
     int64_t Connection::MakeChunkKey(int cx, int cz)
     {
         return (static_cast<int64_t>(cx) << 32) |
             static_cast<uint32_t>(cz);
+    }
+
+    int Connection::InventoryIndexToMenuSlot(int inventoryIndex)
+    {
+        if (inventoryIndex < 0 || inventoryIndex >= 36)
+            return -1;
+        return inventoryIndex < 9 ? (36 + inventoryIndex) : inventoryIndex;
+    }
+
+    int Connection::ArmorIndexToMenuSlot(int armorIndex)
+    {
+        if (armorIndex < 0 || armorIndex >= 4)
+            return -1;
+        return 8 - armorIndex;
+    }
+
+    int Connection::MenuSlotToInventoryIndex(int menuSlot)
+    {
+        if (menuSlot >= 9 && menuSlot <= 35)
+            return menuSlot;
+        if (menuSlot >= 36 && menuSlot <= 44)
+            return menuSlot - 36;
+        return -1;
+    }
+
+    int Connection::MenuSlotToArmorIndex(int menuSlot)
+    {
+        if (menuSlot >= 5 && menuSlot <= 8)
+            return 8 - menuSlot;
+        return -1;
+    }
+
+    ItemInstanceData Connection::GetMenuSlotItem(int menuSlot) const
+    {
+        int inventoryIndex = MenuSlotToInventoryIndex(menuSlot);
+        if (inventoryIndex >= 0)
+            return m_inventoryItems[inventoryIndex];
+
+        int armorIndex = MenuSlotToArmorIndex(menuSlot);
+        if (armorIndex >= 0)
+            return m_armorItems[armorIndex];
+
+        return ItemInstanceData();
+    }
+
+    void Connection::SetMenuSlotItem(int menuSlot, const ItemInstanceData& item)
+    {
+        int inventoryIndex = MenuSlotToInventoryIndex(menuSlot);
+        if (inventoryIndex >= 0)
+        {
+            m_inventoryItems[inventoryIndex] = item;
+            return;
+        }
+
+        int armorIndex = MenuSlotToArmorIndex(menuSlot);
+        if (armorIndex >= 0)
+        {
+            m_armorItems[armorIndex] = item;
+        }
     }
 
     Connection::Connection(uint8_t smallId, TcpLayer* tcp,
@@ -114,6 +197,18 @@ namespace LCEServer
             case PacketId::SetCarriedItem:
                 if (m_state == ConnectionState::Playing)
                     HandleSetCarriedItem(pkt.data(), (int)pkt.size());
+                break;
+            case PacketId::ContainerClick:
+                if (m_state == ConnectionState::Playing)
+                    HandleContainerClick(pkt.data(), (int)pkt.size());
+                break;
+            case PacketId::ContainerAck:
+                if (m_state == ConnectionState::Playing)
+                    HandleContainerAck(pkt.data(), (int)pkt.size());
+                break;
+            case PacketId::CraftItem:
+                if (m_state == ConnectionState::Playing)
+                    HandleCraftItem(pkt.data(), (int)pkt.size());
                 break;
             case PacketId::Animate:
                 if (m_state == ConnectionState::Playing)
@@ -566,29 +661,71 @@ namespace LCEServer
         // 3. SetCarriedItem (id=16) — slot 0
         SendPacket(PacketHandler::WriteSetCarriedItem(0));
 
-        // 4. SetTime (id=4)
+        // 4. Player inventory sync (id=104 + carried slot via id=103)
+        SendInventorySnapshot();
+
+        // 5. SetTime (id=4)
         SendPacket(PacketHandler::WriteSetTime(gameTime, dayTime));
 
-        // 5. GameEvent STOP_RAINING (id=70)
+        // 6. GameEvent STOP_RAINING (id=70)
         SendPacket(PacketHandler::WriteGameEvent(2, 0));
 
-        // 6. Chunks
+        // 7. Chunks
         SendSpawnChunks();
 
-        // 7. Teleport to spawn
+        // 8. Teleport to spawn
         double sy = (double)spawnY + kSpawnFeetEpsilon;
         SendPacket(PacketHandler::WriteMovePlayerPosRot(
             (double)spawnX + 0.5, sy + 1.62, sy,
             (double)spawnZ + 0.5,
             0.0f, 0.0f, true, false));
 
-        // 8. SetHealth — send initial health so the HUD shows correctly
+        // 9. SetHealth — send initial health so the HUD shows correctly
         SendPacket(PacketHandler::WriteSetHealth(
             m_health, m_food, m_saturation));
 
         Logger::Info("Server",
             "Sent spawn sequence to '%ls' at spawnY=%d playerY=%.2f pos=(%d, %d, %d)",
             m_playerName.c_str(), spawnY, sy + 1.62, spawnX, spawnY, spawnZ);
+    }
+
+    void Connection::SendInventorySnapshot()
+    {
+        std::vector<ItemInstanceData> menuItems(45);
+
+        // 0=result, 1-4=2x2 crafting input stay empty until native container logic exists.
+        for (int armorIndex = 0; armorIndex < 4; ++armorIndex)
+        {
+            int menuSlot = ArmorIndexToMenuSlot(armorIndex);
+            if (menuSlot >= 0)
+                menuItems[menuSlot] = m_armorItems[armorIndex];
+        }
+
+        for (int inventoryIndex = 0; inventoryIndex < 36; ++inventoryIndex)
+        {
+            int menuSlot = InventoryIndexToMenuSlot(inventoryIndex);
+            if (menuSlot >= 0)
+                menuItems[menuSlot] = m_inventoryItems[inventoryIndex];
+        }
+
+        SendPacket(PacketHandler::WriteContainerSetContent(0, menuItems));
+        SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
+    }
+
+    void Connection::SendInventorySlotUpdate(int inventoryIndex)
+    {
+        int menuSlot = InventoryIndexToMenuSlot(inventoryIndex);
+        if (menuSlot < 0) return;
+        SendPacket(PacketHandler::WriteContainerSetSlot(
+            0, static_cast<int16_t>(menuSlot), m_inventoryItems[inventoryIndex]));
+    }
+
+    void Connection::SendArmorSlotUpdate(int armorIndex)
+    {
+        int menuSlot = ArmorIndexToMenuSlot(armorIndex);
+        if (menuSlot < 0) return;
+        SendPacket(PacketHandler::WriteContainerSetSlot(
+            0, static_cast<int16_t>(menuSlot), m_armorItems[armorIndex]));
     }
 
     // =============================================================
@@ -987,6 +1124,274 @@ namespace LCEServer
             m_playerName.c_str(), m_hotbarSlot);
     }
 
+    void Connection::HandleContainerClick(const uint8_t* data, int size)
+    {
+        PacketHandler::ContainerClickData click;
+        if (!PacketHandler::ReadContainerClick(data, size, click))
+            return;
+
+        if (click.containerId != 0)
+        {
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
+            SendInventorySnapshot();
+            return;
+        }
+
+        if ((click.clickType != 0 && click.clickType != 1) ||
+            (click.buttonNum != 0 && click.buttonNum != 1))
+        {
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
+            SendInventorySnapshot();
+            return;
+        }
+
+        if (click.slotNum == -999)
+        {
+            ItemInstanceData expected;
+            if (!m_carriedItem.IsEmpty())
+                expected = m_carriedItem;
+
+            if (!ItemsMatch(expected, click.item))
+            {
+                SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
+                SendInventorySnapshot();
+                return;
+            }
+
+            if (!m_carriedItem.IsEmpty())
+            {
+                if (click.buttonNum == 0)
+                {
+                    m_carriedItem = ItemInstanceData();
+                }
+                else
+                {
+                    if (m_carriedItem.count > 1)
+                    {
+                        m_carriedItem.count -= 1;
+                    }
+                    else
+                    {
+                        m_carriedItem = ItemInstanceData();
+                    }
+                }
+            }
+
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, true));
+            SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
+            return;
+        }
+
+        ItemInstanceData slotItem = GetMenuSlotItem(click.slotNum);
+        ItemInstanceData clickedResult = slotItem;
+        if (!ItemsMatch(clickedResult, click.item))
+        {
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, false));
+            SendInventorySnapshot();
+            return;
+        }
+
+        if (click.clickType == 1)
+        {
+            bool changed = false;
+            ItemInstanceData sourceItem = slotItem;
+
+            auto moveIntoRange = [&](int startSlot, int endSlotExclusive) -> bool
+            {
+                bool moved = false;
+                ItemInstanceData moving = GetMenuSlotItem(click.slotNum);
+                if (moving.IsEmpty())
+                    return false;
+
+                for (int slot = startSlot; slot < endSlotExclusive && moving.count > 0; ++slot)
+                {
+                    if (slot == click.slotNum)
+                        continue;
+
+                    ItemInstanceData target = GetMenuSlotItem(slot);
+                    if (target.IsEmpty() || target.id != moving.id || target.aux != moving.aux || target.count >= 64)
+                        continue;
+
+                    int space = 64 - target.count;
+                    int transfer = moving.count < space ? moving.count : space;
+                    target.count = static_cast<uint8_t>(target.count + transfer);
+                    moving.count = static_cast<uint8_t>(moving.count - transfer);
+                    SetMenuSlotItem(slot, target);
+                    moved = true;
+                }
+
+                for (int slot = startSlot; slot < endSlotExclusive && moving.count > 0; ++slot)
+                {
+                    if (slot == click.slotNum)
+                        continue;
+
+                    ItemInstanceData target = GetMenuSlotItem(slot);
+                    if (!target.IsEmpty())
+                        continue;
+
+                    SetMenuSlotItem(slot, moving);
+                    moving = ItemInstanceData();
+                    moved = true;
+                }
+
+                if (moved)
+                    SetMenuSlotItem(click.slotNum, moving);
+
+                return moved;
+            };
+
+            int inventoryIndex = MenuSlotToInventoryIndex(click.slotNum);
+            int armorIndex = MenuSlotToArmorIndex(click.slotNum);
+
+            if (inventoryIndex >= 0)
+            {
+                int armorMenuSlot = GetArmorMenuSlotForItemId(sourceItem.id);
+                if (armorMenuSlot >= 0 && GetMenuSlotItem(armorMenuSlot).IsEmpty())
+                {
+                    SetMenuSlotItem(armorMenuSlot, sourceItem);
+                    SetMenuSlotItem(click.slotNum, ItemInstanceData());
+                    changed = true;
+                }
+                else if (click.slotNum >= 9 && click.slotNum < 36)
+                {
+                    changed = moveIntoRange(36, 45);
+                }
+                else if (click.slotNum >= 36 && click.slotNum < 45)
+                {
+                    changed = moveIntoRange(9, 36);
+                }
+            }
+            else if (armorIndex >= 0)
+            {
+                changed = moveIntoRange(9, 45);
+            }
+
+            SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, true));
+            if (changed)
+                SendInventorySnapshot();
+            return;
+        }
+
+        bool changedSlot = false;
+        bool changedCarried = false;
+
+        if (slotItem.IsEmpty())
+        {
+            if (!m_carriedItem.IsEmpty())
+            {
+                int moveCount = (click.buttonNum == 0) ? m_carriedItem.count : 1;
+                ItemInstanceData placed = m_carriedItem;
+                placed.count = static_cast<uint8_t>(moveCount);
+                SetMenuSlotItem(click.slotNum, placed);
+                changedSlot = true;
+
+                if (m_carriedItem.count > moveCount)
+                {
+                    m_carriedItem.count = static_cast<uint8_t>(m_carriedItem.count - moveCount);
+                }
+                else
+                {
+                    m_carriedItem = ItemInstanceData();
+                }
+                changedCarried = true;
+            }
+        }
+        else if (m_carriedItem.IsEmpty())
+        {
+            if (click.buttonNum == 0)
+            {
+                m_carriedItem = slotItem;
+                SetMenuSlotItem(click.slotNum, ItemInstanceData());
+            }
+            else
+            {
+                int takeCount = (slotItem.count + 1) / 2;
+                m_carriedItem = slotItem;
+                m_carriedItem.count = static_cast<uint8_t>(takeCount);
+                if (slotItem.count > takeCount)
+                {
+                    slotItem.count = static_cast<uint8_t>(slotItem.count - takeCount);
+                    SetMenuSlotItem(click.slotNum, slotItem);
+                }
+                else
+                {
+                    SetMenuSlotItem(click.slotNum, ItemInstanceData());
+                }
+            }
+            changedSlot = true;
+            changedCarried = true;
+        }
+        else if (slotItem.id == m_carriedItem.id &&
+                 slotItem.aux == m_carriedItem.aux &&
+                 slotItem.count < 64)
+        {
+            int moveCount = (click.buttonNum == 0) ? m_carriedItem.count : 1;
+            int space = 64 - slotItem.count;
+            if (moveCount > space)
+                moveCount = space;
+
+            if (moveCount > 0)
+            {
+                slotItem.count = static_cast<uint8_t>(slotItem.count + moveCount);
+                SetMenuSlotItem(click.slotNum, slotItem);
+                changedSlot = true;
+
+                if (m_carriedItem.count > moveCount)
+                {
+                    m_carriedItem.count = static_cast<uint8_t>(m_carriedItem.count - moveCount);
+                }
+                else
+                {
+                    m_carriedItem = ItemInstanceData();
+                }
+                changedCarried = true;
+            }
+        }
+        else if (click.buttonNum == 0)
+        {
+            ItemInstanceData temp = slotItem;
+            SetMenuSlotItem(click.slotNum, m_carriedItem);
+            m_carriedItem = temp;
+            changedSlot = true;
+            changedCarried = true;
+        }
+
+        SendPacket(PacketHandler::WriteContainerAck(click.containerId, click.uid, true));
+
+        if (changedSlot)
+        {
+            int inventoryIndex = MenuSlotToInventoryIndex(click.slotNum);
+            if (inventoryIndex >= 0)
+                SendInventorySlotUpdate(inventoryIndex);
+            else
+            {
+                int armorIndex = MenuSlotToArmorIndex(click.slotNum);
+                if (armorIndex >= 0)
+                    SendArmorSlotUpdate(armorIndex);
+            }
+        }
+        if (changedCarried)
+            SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
+    }
+
+    void Connection::HandleContainerAck(const uint8_t* data, int size)
+    {
+        (void)data;
+        (void)size;
+    }
+
+    void Connection::HandleCraftItem(const uint8_t* data, int size)
+    {
+        PacketHandler::CraftItemData craft;
+        if (!PacketHandler::ReadCraftItem(data, size, craft))
+            return;
+
+        Logger::Info("Server",
+            "'%ls' sent CraftItem uid=%d recipe=%d (not implemented yet; resyncing inventory)",
+            m_playerName.c_str(), craft.uid, craft.recipe);
+        SendInventorySnapshot();
+    }
+
     // ---------------------------------------------------------------
     // HandleAnimate (id=18) client->server
     // Wire: [byte 18][int entityId][byte action]
@@ -1064,6 +1469,51 @@ namespace LCEServer
             SendPacket(PacketHandler::WriteEntityEvent(
                 m_entityId, EntityEventId::Hurt));
         }
+    }
+
+    bool Connection::GiveItem(int itemId, int amount, int aux)
+    {
+        if (itemId < 0 || amount <= 0)
+            return false;
+
+        std::vector<int> touchedSlots;
+        int remaining = amount;
+
+        for (int pass = 0; pass < 2 && remaining > 0; ++pass)
+        {
+            for (int i = 0; i < static_cast<int>(m_inventoryItems.size()) && remaining > 0; ++i)
+            {
+                ItemInstanceData& slot = m_inventoryItems[i];
+
+                if (pass == 0)
+                {
+                    if (slot.IsEmpty() || slot.id != itemId || slot.aux != aux || slot.count >= 64)
+                        continue;
+                }
+                else
+                {
+                    if (!slot.IsEmpty())
+                        continue;
+                    slot.id = static_cast<int16_t>(itemId);
+                    slot.aux = static_cast<int16_t>(aux);
+                    slot.count = 0;
+                }
+
+                int space = 64 - slot.count;
+                if (space <= 0)
+                    continue;
+
+                int toAdd = (space < remaining) ? space : remaining;
+                slot.count = static_cast<uint8_t>(slot.count + toAdd);
+                remaining -= toAdd;
+                touchedSlots.push_back(i);
+            }
+        }
+
+        for (int slotIndex : touchedSlots)
+            SendInventorySlotUpdate(slotIndex);
+
+        return remaining == 0;
     }
 
     // ---------------------------------------------------------------

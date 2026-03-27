@@ -72,7 +72,12 @@ namespace LCEServer
         constexpr int BlockRegionUpdate = 51;
         constexpr int TileUpdate      = 53;
         constexpr int LevelEvent      = 61;
+        constexpr int CraftItem       = 150;
         constexpr int ContainerClose  = 101;
+        constexpr int ContainerSetSlot = 103;
+        constexpr int ContainerSetContent = 104;
+        constexpr int ContainerAck = 106;
+        constexpr int ContainerClick = 102;
         constexpr int SetCreativeModeSlot = 107;
         constexpr int GameEvent           = 70;
         constexpr int ChunkVisibilityArea = 155; // 4J batch visibility packet (S->C on login)

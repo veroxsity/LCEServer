@@ -762,13 +762,16 @@ namespace LCEServer
             catch (...) {}
         }
 
-        // NOTE: Actual item giving requires inventory
-        // packet support which is M5+. For now, log it.
-        Logger::Warn("Console",
-            "give: item delivery not yet implemented "
-            "(needs inventory packets). "
-            "Would give %s x%d of item %d:%d.",
-            args[1].c_str(), amount, itemId, aux);
+        bool delivered = conn->GiveItem(itemId, amount, aux);
+        if (delivered) {
+            Logger::Info("Console",
+                "Gave %s x%d of item %d:%d.",
+                args[1].c_str(), amount, itemId, aux);
+        } else {
+            Logger::Warn("Console",
+                "Inventory full while giving %s x%d of item %d:%d. Partial delivery may have occurred.",
+                args[1].c_str(), amount, itemId, aux);
+        }
     }
 
     // ========== plugins ==========
