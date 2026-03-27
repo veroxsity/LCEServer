@@ -20,6 +20,9 @@ namespace JsonUtil
     // Load a JSON array of objects from file.
     // Returns empty vector if file doesn't exist
     // (creates the file with "[]").
+    bool LoadJsonArrayFromString(const std::string& text,
+                                 std::vector<JsonObject>& out);
+
     bool LoadJsonArray(const std::string& path,
                        std::vector<JsonObject>& out);
 

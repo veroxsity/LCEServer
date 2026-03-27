@@ -146,6 +146,50 @@ namespace JsonUtil
         }
     }
 
+    bool LoadJsonArrayFromString(const std::string& input,
+                                 std::vector<JsonObject>& out)
+    {
+        out.clear();
+
+        std::string text = input;
+
+        if (text.empty()) text = "[]";
+
+        // Strip UTF-8 BOM
+        if (text.size() >= 3 &&
+            (uint8_t)text[0] == 0xEF &&
+            (uint8_t)text[1] == 0xBB &&
+            (uint8_t)text[2] == 0xBF)
+            text = text.substr(3);
+
+        // Find array start
+        size_t pos = SkipWs(text, 0);
+        if (pos >= text.size() || text[pos] != '[')
+        {
+            return false;
+        }
+        pos++; // skip '['
+
+        while (true)
+        {
+            pos = SkipWs(text, pos);
+            if (pos >= text.size()) break;
+            if (text[pos] == ']') break;
+
+            JsonObject obj;
+            if (!ParseObject(text, pos, obj))
+            {
+                return false;
+            }
+            out.push_back(obj);
+
+            pos = SkipWs(text, pos);
+            if (pos < text.size() && text[pos] == ',')
+                pos++;
+        }
+        return true;
+    }
+
     bool LoadJsonArray(const std::string& path,
                        std::vector<JsonObject>& out)
     {
@@ -170,44 +214,13 @@ namespace JsonUtil
         std::string text = ss.str();
         f.close();
 
-        if (text.empty()) text = "[]";
-
-        // Strip UTF-8 BOM
-        if (text.size() >= 3 &&
-            (uint8_t)text[0] == 0xEF &&
-            (uint8_t)text[1] == 0xBB &&
-            (uint8_t)text[2] == 0xBF)
-            text = text.substr(3);
-
-        // Find array start
-        size_t pos = SkipWs(text, 0);
-        if (pos >= text.size() || text[pos] != '[')
+        if (!LoadJsonArrayFromString(text, out))
         {
-            Logger::Error("JsonUtil", "Expected '[' in %s",
+            Logger::Error("JsonUtil", "Failed to parse JSON array in %s",
                           path.c_str());
             return false;
         }
-        pos++; // skip '['
 
-        while (true)
-        {
-            pos = SkipWs(text, pos);
-            if (pos >= text.size()) break;
-            if (text[pos] == ']') break;
-
-            JsonObject obj;
-            if (!ParseObject(text, pos, obj))
-            {
-                Logger::Error("JsonUtil",
-                    "Failed to parse object in %s", path.c_str());
-                return false;
-            }
-            out.push_back(obj);
-
-            pos = SkipWs(text, pos);
-            if (pos < text.size() && text[pos] == ',')
-                pos++;
-        }
         return true;
     }
 

@@ -1,6 +1,7 @@
 // LCEServer — Connection implementation
 // Handshake logic mirrors PendingConnection.cpp from the LCE source
 #include "Connection.h"
+#include "LegacyCrafting.h"
 #include "TcpLayer.h"
 #include "ServerConfig.h"
 #include "../world/World.h"
@@ -12,12 +13,115 @@ namespace LCEServer
     namespace
     {
         constexpr double kSpawnFeetEpsilon = 0.1;
+        constexpr int kAnyAuxValue = -1;
 
         bool ItemsMatch(const ItemInstanceData& a, const ItemInstanceData& b)
         {
             if (a.IsEmpty() && b.IsEmpty())
                 return true;
             return a.id == b.id && a.count == b.count && a.aux == b.aux;
+        }
+
+        int GetLegacyMaxStackSize(int itemId)
+        {
+            switch (itemId)
+            {
+            case 259: // flint and steel
+            case 342: // chest minecart
+            case 343: // furnace minecart
+            case 359: // shears
+            case 398: // carrot on a stick
+            case 407: // tnt minecart
+            case 408: // hopper minecart
+                return 1;
+            default:
+                return 64;
+            }
+        }
+
+        int CountInventoryResource(
+            const std::array<ItemInstanceData, 36>& inventory,
+            int itemId,
+            int aux,
+            bool anyAux)
+        {
+            int total = 0;
+            for (const ItemInstanceData& slot : inventory)
+            {
+                if (slot.IsEmpty() || slot.id != itemId)
+                    continue;
+                if (!anyAux && slot.aux != aux)
+                    continue;
+                total += slot.count;
+            }
+            return total;
+        }
+
+        bool RemoveInventoryResource(
+            std::array<ItemInstanceData, 36>& inventory,
+            int itemId,
+            int aux,
+            bool anyAux,
+            int count)
+        {
+            int remaining = count;
+            for (ItemInstanceData& slot : inventory)
+            {
+                if (remaining <= 0)
+                    break;
+                if (slot.IsEmpty() || slot.id != itemId)
+                    continue;
+                if (!anyAux && slot.aux != aux)
+                    continue;
+
+                int toRemove = (slot.count < remaining) ? slot.count : remaining;
+                slot.count = static_cast<uint8_t>(slot.count - toRemove);
+                remaining -= toRemove;
+                if (slot.count == 0)
+                    slot = ItemInstanceData();
+            }
+
+            return remaining == 0;
+        }
+
+        bool TryInsertInventoryItem(
+            std::array<ItemInstanceData, 36>& inventory,
+            const ItemInstanceData& item)
+        {
+            if (item.IsEmpty())
+                return true;
+
+            int remaining = item.count;
+            const int maxStack = GetLegacyMaxStackSize(item.id);
+
+            for (ItemInstanceData& slot : inventory)
+            {
+                if (remaining <= 0)
+                    break;
+                if (slot.IsEmpty() || slot.id != item.id || slot.aux != item.aux || slot.count >= maxStack)
+                    continue;
+
+                int space = maxStack - slot.count;
+                int toAdd = (space < remaining) ? space : remaining;
+                slot.count = static_cast<uint8_t>(slot.count + toAdd);
+                remaining -= toAdd;
+            }
+
+            for (ItemInstanceData& slot : inventory)
+            {
+                if (remaining <= 0)
+                    break;
+                if (!slot.IsEmpty())
+                    continue;
+
+                int toAdd = (remaining < maxStack) ? remaining : maxStack;
+                slot.id = item.id;
+                slot.aux = item.aux;
+                slot.count = static_cast<uint8_t>(toAdd);
+                remaining -= toAdd;
+            }
+
+            return remaining == 0;
         }
 
         int GetArmorMenuSlotForItemId(int itemId)
@@ -1425,9 +1529,73 @@ namespace LCEServer
         if (!PacketHandler::ReadCraftItem(data, size, craft))
             return;
 
+        const CraftRecipeSpec* recipe = FindLegacyCraftingRecipe(craft.recipe);
+        if (!recipe)
+        {
+            Logger::Info("Server",
+                "'%ls' sent unsupported CraftItem uid=%d recipe=%d; resyncing inventory",
+                m_playerName.c_str(), craft.uid, craft.recipe);
+            SendInventorySnapshot();
+            return;
+        }
+
+        for (const CraftIngredientSpec& ingredient : recipe->ingredients)
+        {
+            int have = CountInventoryResource(
+                m_inventoryItems,
+                ingredient.id,
+                ingredient.aux,
+                ingredient.anyAux);
+            if (have < ingredient.count)
+            {
+                Logger::Info("Server",
+                    "'%ls' lacked ingredients for CraftItem recipe=%d result=%d:%d x%d; resyncing inventory",
+                    m_playerName.c_str(),
+                    craft.recipe,
+                    recipe->result.id,
+                    recipe->result.aux,
+                    recipe->result.count);
+                SendInventorySnapshot();
+                return;
+            }
+        }
+
+        std::array<ItemInstanceData, 36> craftedInventory = m_inventoryItems;
+        for (const CraftIngredientSpec& ingredient : recipe->ingredients)
+        {
+            if (!RemoveInventoryResource(
+                    craftedInventory,
+                    ingredient.id,
+                    ingredient.aux,
+                    ingredient.anyAux,
+                    ingredient.count))
+            {
+                SendInventorySnapshot();
+                return;
+            }
+        }
+
+        if (!TryInsertInventoryItem(craftedInventory, recipe->result))
+        {
+            Logger::Info("Server",
+                "'%ls' had no room for CraftItem recipe=%d result=%d:%d x%d; resyncing inventory",
+                m_playerName.c_str(),
+                craft.recipe,
+                recipe->result.id,
+                recipe->result.aux,
+                recipe->result.count);
+            SendInventorySnapshot();
+            return;
+        }
+
+        m_inventoryItems = craftedInventory;
         Logger::Info("Server",
-            "'%ls' sent CraftItem uid=%d recipe=%d (not implemented yet; resyncing inventory)",
-            m_playerName.c_str(), craft.uid, craft.recipe);
+            "'%ls' crafted recipe=%d -> %d:%d x%d",
+            m_playerName.c_str(),
+            craft.recipe,
+            recipe->result.id,
+            recipe->result.aux,
+            recipe->result.count);
         SendInventorySnapshot();
     }
 

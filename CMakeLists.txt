@@ -21,6 +21,7 @@ add_executable(LCEServer
     src/core/ConnectionManager.cpp
     src/core/Connection.cpp
     src/core/PacketHandler.cpp
+    src/core/LegacyCrafting.cpp
     src/console/Console.cpp
     src/console/LegacyItemIds.cpp
     src/world/Nbt.cpp
@@ -34,6 +35,7 @@ add_executable(LCEServer
     src/access/Whitelist.cpp
     src/access/OpsList.cpp
 )
+
 
 # This is a standalone server — we do NOT link against Minecraft.World
 # or pull in the LCE stdafx.h. All packet serialisation is reimplemented
