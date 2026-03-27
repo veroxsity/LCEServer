@@ -9,6 +9,11 @@
 
 namespace LCEServer
 {
+    namespace
+    {
+        constexpr double kSpawnFeetEpsilon = 0.1;
+    }
+
     int64_t Connection::MakeChunkKey(int cx, int cz)
     {
         return (static_cast<int64_t>(cx) << 32) |
@@ -373,7 +378,7 @@ namespace LCEServer
         if (m_world)
         {
             m_x = (double)m_world->GetSpawnX() + 0.5;
-            m_y = (double)m_world->GetSpawnY();
+            m_y = (double)m_world->ResolveSpawnFeetY() + kSpawnFeetEpsilon;
             m_z = (double)m_world->GetSpawnZ() + 0.5;
         }
 
@@ -542,7 +547,7 @@ namespace LCEServer
     {
         // Get spawn from world or use defaults
         int spawnX = m_world ? m_world->GetSpawnX() : 0;
-        int spawnY = m_world ? m_world->GetSpawnY() : 5;
+        int spawnY = m_world ? m_world->ResolveSpawnFeetY() : 5;
         int spawnZ = m_world ? m_world->GetSpawnZ() : 0;
         int64_t gameTime = m_world ? m_world->GetGameTime() : 0;
         int64_t dayTime  = m_world ? m_world->GetDayTime() : 0;
@@ -571,7 +576,7 @@ namespace LCEServer
         SendSpawnChunks();
 
         // 7. Teleport to spawn
-        double sy = (double)spawnY;
+        double sy = (double)spawnY + kSpawnFeetEpsilon;
         SendPacket(PacketHandler::WriteMovePlayerPosRot(
             (double)spawnX + 0.5, sy + 1.62, sy,
             (double)spawnZ + 0.5,
@@ -582,8 +587,8 @@ namespace LCEServer
             m_health, m_food, m_saturation));
 
         Logger::Info("Server",
-            "Sent spawn sequence to '%ls' at (%d, %d, %d)",
-            m_playerName.c_str(), spawnX, spawnY, spawnZ);
+            "Sent spawn sequence to '%ls' at spawnY=%d playerY=%.2f pos=(%d, %d, %d)",
+            m_playerName.c_str(), spawnY, sy + 1.62, spawnX, spawnY, spawnZ);
     }
 
     // =============================================================
@@ -1152,10 +1157,10 @@ namespace LCEServer
         // packets confuses the client state machine and causes a disconnect.
         // Matches PlayerList::respawn source: sends RespawnPacket then teleport only.
         int spawnX = m_world ? m_world->GetSpawnX() : 0;
-        int spawnY = m_world ? m_world->GetSpawnY() : 5;
+        int spawnFeetY = m_world ? m_world->ResolveSpawnFeetY() : 5;
         int spawnZ = m_world ? m_world->GetSpawnZ() : 0;
         m_x = (double)spawnX + 0.5;
-        m_y = (double)spawnY;
+        m_y = (double)spawnFeetY + kSpawnFeetEpsilon;
         m_z = (double)spawnZ + 0.5;
         m_prevY = m_y;
         m_lastChunkX = INT32_MIN;
@@ -1163,7 +1168,7 @@ namespace LCEServer
         m_visibleChunks.clear();
 
         // Teleport to spawn — matches player->connection->teleport() in source
-        double sy = (double)spawnY;
+        double sy = (double)spawnFeetY + kSpawnFeetEpsilon;
         SendPacket(PacketHandler::WriteMovePlayerPosRot(
             m_x, sy + 1.62, sy, m_z,
             0.0f, 0.0f, true, false));
@@ -1171,8 +1176,8 @@ namespace LCEServer
         // Resend chunks so the world is visible after respawn
         SendSpawnChunks();
 
-        Logger::Info("Server", "'%ls' respawn complete, teleported to (%d,%d,%d)",
-            m_playerName.c_str(), spawnX, spawnY, spawnZ);
+        Logger::Info("Server", "'%ls' respawn complete at spawnY=%d playerY=%.2f pos=(%d,%d,%d)",
+            m_playerName.c_str(), spawnFeetY, sy + 1.62, spawnX, spawnFeetY, spawnZ);
     }
 
 } // namespace LCEServer

@@ -74,6 +74,7 @@ namespace LCEServer
         int GetSpawnX() const { return m_spawnX; }
         int GetSpawnY() const { return m_spawnY; }
         int GetSpawnZ() const { return m_spawnZ; }
+        int ResolveSpawnFeetY();
         int64_t GetGameTime() const { return m_gameTime; }
         int64_t GetDayTime() const { return m_dayTime; }
         int GetGameMode() const { return m_gameMode; }

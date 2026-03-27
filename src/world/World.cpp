@@ -215,6 +215,42 @@ namespace LCEServer
         return ptr;
     }
 
+    int World::ResolveSpawnFeetY()
+    {
+        ChunkData* chunk = GetChunk(m_spawnX >> 4, m_spawnZ >> 4);
+        if (!chunk)
+            return m_spawnY + 1;
+
+        int lx = ((m_spawnX % 16) + 16) % 16;
+        int lz = ((m_spawnZ % 16) + 16) % 16;
+        int columnIndex = lx + lz * 16;
+
+        if (!chunk->heightMap.empty() &&
+            columnIndex >= 0 &&
+            columnIndex < (int)chunk->heightMap.size())
+        {
+            int y = chunk->heightMap[columnIndex];
+            if (y > 0 && y < LEGACY_WORLD_HEIGHT)
+                return y;
+        }
+
+        if (!chunk->blocks.empty())
+        {
+            for (int y = LEGACY_WORLD_HEIGHT - 1; y >= 0; --y)
+            {
+                int idx = ChunkBlockIndex(lx, lz, y);
+                if (idx >= 0 &&
+                    idx < (int)chunk->blocks.size() &&
+                    chunk->blocks[idx] != 0)
+                {
+                    return y + 1;
+                }
+            }
+        }
+
+        return m_spawnY + 1;
+    }
+
     void World::RefreshChunkForSend(int chunkX, int chunkZ)
     {
         auto it = m_chunks.find(ChunkKey(chunkX, chunkZ));
