@@ -2,6 +2,7 @@
 // Handshake logic mirrors PendingConnection.cpp from the LCE source
 #include "Connection.h"
 #include "BlockPlacement.h"
+#include "BlockInteraction.h"
 #include "LegacyCrafting.h"
 #include "RedstoneLogic.h"
 #include "TileSupport.h"
@@ -262,6 +263,11 @@ namespace LCEServer
 
         using BlockPlacement::GetPistonFacingForPlacement;
         using BlockPlacement::GetDiodeDirectionFromPlayerYaw;
+
+        using BlockInteraction::GetToggledRepeaterDelayData;
+        using BlockInteraction::GetToggledLeverData;
+        using BlockInteraction::TryResolveComparatorToggle;
+        using BlockInteraction::TryResolveButtonPress;
     }
 
     int64_t Connection::MakeChunkKey(int cx, int cz)
@@ -1942,7 +1948,7 @@ namespace LCEServer
 
                     if (clickedBlockId == 93 || clickedBlockId == 94)
                     {
-                        const int newBlockData = (((clickedBlockData & 0xC) + 0x4) & 0xC) | (clickedBlockData & 0x3);
+                        const int newBlockData = GetToggledRepeaterDelayData(clickedBlockData);
                         if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
                             onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
                         resyncPlacementPrediction();
@@ -1951,20 +1957,19 @@ namespace LCEServer
 
                     if (clickedBlockId == 149 || clickedBlockId == 150)
                     {
-                        const int newBlockData = clickedBlockData ^ 0x4;
+                        BlockInteraction::InteractionResult interaction;
+                        if (!TryResolveComparatorToggle(m_world, use.x, use.y, use.z, clickedBlockData, interaction))
+                        {
+                            resyncPlacementPrediction();
+                            return;
+                        }
+
                         clearPendingDiodeTransition(use.x, use.y, use.z);
 
-                        const int dir = GetMinimalDiodeDirection(newBlockData);
-                        const int inputSignal = GetMinimalComparatorInputSignal(m_world, use.x, use.y, use.z, dir);
-                        const int sideSignal = GetMinimalComparatorSideSignal(m_world, use.x, use.y, use.z, dir);
-                        const bool shouldTurnOn =
-                            inputSignal >= 15 || (inputSignal > 0 && (sideSignal == 0 || inputSignal >= sideSignal));
-                        const int targetBlockId = shouldTurnOn ? 150 : 149;
-
-                        if (m_world->SetBlock(use.x, use.y, use.z, targetBlockId, newBlockData))
+                        if (m_world->SetBlock(use.x, use.y, use.z, interaction.blockId, interaction.blockData))
                         {
                             if (onBlockUpdate)
-                                onBlockUpdate(this, use.x, use.y, use.z, targetBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                                onBlockUpdate(this, use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
                             recomputeMinimalRedstoneAround(use.x, use.y, use.z);
                         }
                         resyncPlacementPrediction();
@@ -1973,7 +1978,7 @@ namespace LCEServer
 
                     if (clickedBlockId == 69)
                     {
-                        const int newBlockData = clickedBlockData ^ 0x8;
+                        const int newBlockData = GetToggledLeverData(clickedBlockData);
                         if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
                         {
                             onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
@@ -1985,12 +1990,13 @@ namespace LCEServer
 
                     if (clickedBlockId == 77 || clickedBlockId == 143)
                     {
-                        if ((clickedBlockData & 0x8) == 0)
+                        BlockInteraction::InteractionResult interaction;
+                        int releaseTicks = 0;
+                        if (TryResolveButtonPress(clickedBlockId, clickedBlockData, interaction, releaseTicks))
                         {
-                            const int newBlockData = clickedBlockData | 0x8;
-                            if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
+                            if (m_world->SetBlock(use.x, use.y, use.z, interaction.blockId, interaction.blockData) && onBlockUpdate)
                             {
-                                onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                                onBlockUpdate(this, use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
                                 recomputeMinimalRedstoneAround(use.x, use.y, use.z);
                             }
 
@@ -2012,7 +2018,7 @@ namespace LCEServer
                             pending.z = use.z;
                             pending.blockId = clickedBlockId;
                             pending.baseData = clickedBlockData & 0x7;
-                            pending.ticksRemaining = (clickedBlockId == 143) ? 30 : 20;
+                            pending.ticksRemaining = releaseTicks;
                             m_pendingButtonReleases.push_back(pending);
                         }
 
