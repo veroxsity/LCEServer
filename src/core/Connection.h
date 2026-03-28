@@ -148,7 +148,41 @@ namespace LCEServer
             std::function<void(int cx, int cz, int delta)>;
         ChunkVisibilityCallback onChunkVisibility;
 
+        using PressurePlateOccupancyCallback =
+            std::function<bool(int x, int y, int z, bool woodenOnly)>;
+        PressurePlateOccupancyCallback isPressurePlateOccupied;
+
     private:
+        struct PendingButtonRelease
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            int blockId = 0;
+            int baseData = 0;
+            int ticksRemaining = 0;
+        };
+
+        struct PendingDiodeTransition
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            int expectedBlockId = 0;
+            int targetBlockId = 0;
+            int blockData = 0;
+            int ticksRemaining = 0;
+        };
+
+        struct PendingPressurePlateCheck
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            int blockId = 0;
+            int ticksRemaining = 0;
+        };
+
         void HandlePreLogin(const uint8_t* data, int size);
         void HandleLogin(const uint8_t* data, int size);
         void HandleKeepAlive(const uint8_t* data, int size);
@@ -177,6 +211,7 @@ namespace LCEServer
         void SendSpawnChunks();
         void StreamChunksAround(int centerCX, int centerCZ, bool fullResync);
         void DrainChunkQueue();
+        void ReleaseVisibleChunks(bool sendHidePackets);
         static int64_t MakeChunkKey(int cx, int cz);
         static int InventoryIndexToMenuSlot(int inventoryIndex);
         static int ArmorIndexToMenuSlot(int armorIndex);
@@ -248,6 +283,9 @@ namespace LCEServer
         bool                m_wasOnGround = true;
         bool                m_isDead = false;
         int                 m_respawnGraceTicks = 0; // suppress fall dmg after respawn
+        std::vector<PendingButtonRelease> m_pendingButtonReleases;
+        std::vector<PendingDiodeTransition> m_pendingDiodeTransitions;
+        std::vector<PendingPressurePlateCheck> m_pendingPressurePlateChecks;
 
         // From PendingConnection: MAX_TICKS_BEFORE_LOGIN = 20 * 30
         static constexpr int MAX_TICKS_BEFORE_LOGIN = 600;

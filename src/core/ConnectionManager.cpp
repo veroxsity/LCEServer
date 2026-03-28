@@ -4,6 +4,7 @@
 #include "../access/BanList.h"
 #include "../access/Whitelist.h"
 #include "../access/OpsList.h"
+#include <cmath>
 
 namespace LCEServer
 {
@@ -270,6 +271,22 @@ namespace LCEServer
                     for (auto& [id, other] : m_connections)
                         if (other->IsPlaying())
                             other->SendPacket(pkt);
+                };
+
+            conn->isPressurePlateOccupied =
+                [this](int x, int y, int z, bool /*woodenOnly*/) -> bool {
+                    for (auto& [id, other] : m_connections)
+                    {
+                        if (!other->IsPlaying() || other->IsDead())
+                            continue;
+
+                        const int playerBlockX = static_cast<int>(std::floor(other->GetX()));
+                        const int playerBlockY = static_cast<int>(std::floor(other->GetY()));
+                        const int playerBlockZ = static_cast<int>(std::floor(other->GetZ()));
+                        if (playerBlockX == x && playerBlockY == y && playerBlockZ == z)
+                            return true;
+                    }
+                    return false;
                 };
 
             // Wire block update broadcast.

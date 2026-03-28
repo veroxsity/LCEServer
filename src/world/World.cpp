@@ -2833,6 +2833,7 @@ namespace LCEServer
         int lx, lz;
         RegionFile::ChunkToLocal(chunk.chunkX, chunk.chunkZ, lx, lz);
         rf->WriteChunk(lx, lz, root);
+        rf->Flush();
         chunk.dirty = false;
     }
 

@@ -7,6 +7,10 @@
 #include "../world/World.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <queue>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace LCEServer
 {
@@ -63,8 +67,16 @@ namespace LCEServer
 
             switch (itemId)
             {
+            case 331: // redstone dust
+                outBlockId = 55;
+                outBlockData = 0;
+                return true;
             case 354: // cake
                 outBlockId = 92;
+                outBlockData = 0;
+                return true;
+            case 356: // repeater
+                outBlockId = 93;
                 outBlockData = 0;
                 return true;
             case 379: // brewing stand
@@ -77,6 +89,10 @@ namespace LCEServer
                 return true;
             case 390: // flower pot
                 outBlockId = 140;
+                outBlockData = 0;
+                return true;
+            case 404: // comparator
+                outBlockId = 149;
                 outBlockData = 0;
                 return true;
             default:
@@ -225,6 +241,1062 @@ namespace LCEServer
                 return type; // FACING_Y
             }
         }
+
+        void OffsetByFace(int face, int& x, int& y, int& z)
+        {
+            switch (face)
+            {
+            case 0: --y; break;
+            case 1: ++y; break;
+            case 2: --z; break;
+            case 3: ++z; break;
+            case 4: --x; break;
+            case 5: ++x; break;
+            default: break;
+            }
+        }
+
+        bool ResolveTilePlanterPlacementTarget(
+            int clickedBlockId,
+            int clickedBlockData,
+            int clickedX,
+            int clickedY,
+            int clickedZ,
+            int face,
+            int& outX,
+            int& outY,
+            int& outZ)
+        {
+            if (face < 0 || face > 5)
+                return false;
+
+            outX = clickedX;
+            outY = clickedY;
+            outZ = clickedZ;
+
+            if (clickedBlockId == 78 && (clickedBlockData & 0x7) < 1)
+            {
+                return true;
+            }
+
+            if (clickedBlockId == 106 || clickedBlockId == 31 || clickedBlockId == 32)
+            {
+                return true;
+            }
+
+            OffsetByFace(face, outX, outY, outZ);
+            return true;
+        }
+
+        bool ResolveRedstoneDustPlacementTarget(
+            int clickedBlockId,
+            int clickedX,
+            int clickedY,
+            int clickedZ,
+            int face,
+            int& outX,
+            int& outY,
+            int& outZ)
+        {
+            if (face < 0 || face > 5)
+                return false;
+
+            outX = clickedX;
+            outY = clickedY;
+            outZ = clickedZ;
+
+            if (clickedBlockId == 78)
+            {
+                return true;
+            }
+
+            OffsetByFace(face, outX, outY, outZ);
+            return true;
+        }
+
+        bool IsTopSolidSupportBlock(int blockId)
+        {
+            switch (blockId)
+            {
+            case 0:
+            case 6:   // sapling
+            case 27:  // powered rail
+            case 28:  // detector rail
+            case 31:  // tall grass
+            case 32:  // dead shrub
+            case 37:  // dandelion
+            case 38:  // poppy
+            case 39:  // brown mushroom
+            case 40:  // red mushroom
+            case 50:  // torch
+            case 51:  // fire
+            case 55:  // redstone dust
+            case 59:  // wheat
+            case 63:  // standing sign
+            case 64:  // wooden door
+            case 65:  // ladder
+            case 66:  // rail
+            case 68:  // wall sign
+            case 69:  // lever
+            case 70:  // stone pressure plate
+            case 71:  // iron door
+            case 72:  // wooden pressure plate
+            case 75:  // redstone torch off
+            case 76:  // redstone torch on
+            case 77:  // stone button
+            case 78:  // snow layer
+            case 83:  // sugar cane
+            case 92:  // cake
+            case 93:  // repeater off
+            case 94:  // repeater on
+            case 96:  // trapdoor
+            case 104: // pumpkin stem
+            case 105: // melon stem
+            case 106: // vine
+            case 111: // lily pad
+            case 115: // nether wart
+            case 117: // brewing stand
+            case 118: // cauldron
+            case 127: // cocoa
+            case 131: // tripwire hook
+            case 132: // tripwire
+            case 140: // flower pot
+            case 143: // wooden button
+            case 149: // comparator off
+            case 150: // comparator on
+            case 157: // activator rail
+            case 171: // carpet
+            case 175: // double plant
+                return false;
+            default:
+                return true;
+            }
+        }
+
+        bool IsInstantBreakBlock(int blockId)
+        {
+            switch (blockId)
+            {
+            case 50:  // torch
+            case 55:  // redstone dust
+            case 75:  // redstone torch off
+            case 76:  // redstone torch on
+            case 93:  // repeater off
+            case 94:  // repeater on
+            case 131: // tripwire hook
+            case 132: // tripwire
+            case 149: // comparator off
+            case 150: // comparator on
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool IsRetargetableInstantBreakBlock(int blockId)
+        {
+            switch (blockId)
+            {
+            case 55:  // redstone dust
+            case 93:  // repeater off
+            case 94:  // repeater on
+            case 131: // tripwire hook
+            case 132: // tripwire
+            case 149: // comparator off
+            case 150: // comparator on
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool IsRedstoneDebugBlock(int blockId)
+        {
+            switch (blockId)
+            {
+            case 55:  // redstone dust
+            case 69:  // lever
+            case 70:  // stone pressure plate
+            case 72:  // wooden pressure plate
+            case 75:  // redstone torch off
+            case 76:  // redstone torch on
+            case 77:  // stone button
+            case 93:  // repeater off
+            case 94:  // repeater on
+            case 131: // tripwire hook
+            case 132: // tripwire
+            case 143: // wooden button
+            case 149: // comparator off
+            case 150: // comparator on
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool IsPressurePlateBlock(int blockId)
+        {
+            return blockId == 70 || blockId == 72;
+        }
+
+        bool TryGetWorldBlock(World* world, int x, int y, int z, int& outBlockId, int& outBlockData)
+        {
+            outBlockId = 0;
+            outBlockData = 0;
+            if (!world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                return false;
+
+            ChunkData* chunk = world->GetChunk(x >> 4, z >> 4);
+            if (!chunk || chunk->blocks.empty())
+                return false;
+
+            int lx = ((x % 16) + 16) % 16;
+            int lz = ((z % 16) + 16) % 16;
+            int idx = ChunkBlockIndex(lx, lz, y);
+            if (idx < 0 || idx >= static_cast<int>(chunk->blocks.size()))
+                return false;
+
+            outBlockId = chunk->blocks[idx];
+            if (!chunk->data.empty())
+            {
+                int nibbleIndex = idx >> 1;
+                uint8_t packed = chunk->data[nibbleIndex];
+                outBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+            }
+            return true;
+        }
+
+        bool IsMinimalRedstoneSourceBlock(int blockId, int blockData)
+        {
+            switch (blockId)
+            {
+            case 69:
+            case 77:
+            case 143:
+                return (blockData & 0x8) != 0;
+            case 70:
+            case 72:
+                return (blockData & 0x1) != 0;
+            case 152:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool TryGetMinimalTorchSupportPosition(
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int& outX,
+            int& outY,
+            int& outZ);
+
+        int GetMinimalSourcePowerToPosition(
+            int blockId,
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int targetX,
+            int targetY,
+            int targetZ)
+        {
+            if (std::abs(sourceX - targetX) + std::abs(sourceY - targetY) + std::abs(sourceZ - targetZ) != 1)
+                return 0;
+
+            switch (blockId)
+            {
+            case 69:
+            case 77:
+            case 143:
+                return (blockData & 0x8) != 0 ? 15 : 0;
+            case 70:
+            case 72:
+                return (blockData & 0x1) != 0 ? 15 : 0;
+            case 152:
+                return 15;
+            case 76:
+            {
+                int supportX = 0;
+                int supportY = 0;
+                int supportZ = 0;
+                if (TryGetMinimalTorchSupportPosition(blockData, sourceX, sourceY, sourceZ, supportX, supportY, supportZ) &&
+                    supportX == targetX && supportY == targetY && supportZ == targetZ)
+                {
+                    return 0;
+                }
+                return 15;
+            }
+            default:
+                return 0;
+            }
+        }
+
+        bool IsMinimalDiodeBlock(int blockId)
+        {
+            return blockId == 93 || blockId == 94 || blockId == 149 || blockId == 150;
+        }
+
+        bool IsMinimalRedstoneTorchBlock(int blockId)
+        {
+            return blockId == 75 || blockId == 76;
+        }
+
+        int GetMinimalDiodeDirection(int blockData)
+        {
+            return blockData & 0x3;
+        }
+
+        bool TryGetMinimalTorchSupportPosition(
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int& outX,
+            int& outY,
+            int& outZ);
+
+        bool TryGetMinimalTorchSupportPosition(
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int& outX,
+            int& outY,
+            int& outZ)
+        {
+            switch (blockData & 0x7)
+            {
+            case 1:
+                outX = sourceX - 1; outY = sourceY; outZ = sourceZ;
+                return true;
+            case 2:
+                outX = sourceX + 1; outY = sourceY; outZ = sourceZ;
+                return true;
+            case 3:
+                outX = sourceX; outY = sourceY; outZ = sourceZ - 1;
+                return true;
+            case 4:
+                outX = sourceX; outY = sourceY; outZ = sourceZ + 1;
+                return true;
+            case 5:
+                outX = sourceX; outY = sourceY - 1; outZ = sourceZ;
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool IsMinimalBlockPoweredAt(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int excludeX,
+            int excludeY,
+            int excludeZ);
+
+        int GetMinimalComparatorInputSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int dir);
+
+        int GetMinimalComparatorSideSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int dir);
+
+        int GetMinimalComparatorOutputSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int blockId,
+            int blockData);
+
+        int GetMinimalDiodeOutputToPosition(
+            World* world,
+            int blockId,
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int targetX,
+            int targetY,
+            int targetZ)
+        {
+            if (blockId != 94 && blockId != 150)
+            {
+                if (blockId != 149 && blockId != 150)
+                    return 0;
+            }
+            if (sourceY != targetY)
+                return 0;
+
+            static const int stepX[] = { 0, -1, 0, 1 };
+            static const int stepZ[] = { 1, 0, -1, 0 };
+            const int dir = GetMinimalDiodeDirection(blockData);
+            const int outputX = sourceX - stepX[dir];
+            const int outputZ = sourceZ - stepZ[dir];
+            if (outputX != targetX || outputZ != targetZ)
+                return 0;
+
+            if (blockId == 94)
+                return 15;
+            if (blockId == 150)
+                return std::clamp(
+                    GetMinimalComparatorOutputSignal(world, sourceX, sourceY, sourceZ, blockId, blockData),
+                    0, 15);
+            return 0;
+        }
+
+        int GetMinimalDirectDustPower(World* world, int x, int y, int z)
+        {
+            static const int dx[] = { -1, 1, 0, 0, 0, 0 };
+            static const int dy[] = { 0, 0, 0, 0, -1, 1 };
+            static const int dz[] = { 0, 0, -1, 1, 0, 0 };
+
+            for (int i = 0; i < 6; ++i)
+            {
+                int neighborBlockId = 0;
+                int neighborBlockData = 0;
+                const int neighborX = x + dx[i];
+                const int neighborY = y + dy[i];
+                const int neighborZ = z + dz[i];
+                if (!TryGetWorldBlock(world, neighborX, neighborY, neighborZ, neighborBlockId, neighborBlockData))
+                    continue;
+
+                int neighborPower = 0;
+                neighborPower = GetMinimalSourcePowerToPosition(
+                    neighborBlockId, neighborBlockData,
+                    neighborX, neighborY, neighborZ,
+                    x, y, z);
+                if (neighborPower <= 0)
+                    neighborPower = GetMinimalDiodeOutputToPosition(
+                        world,
+                        neighborBlockId, neighborBlockData,
+                        neighborX, neighborY, neighborZ,
+                        x, y, z);
+
+                if (neighborPower > 0)
+                    return neighborPower;
+            }
+            return 0;
+        }
+
+        int GetMinimalComparatorInputSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int dir)
+        {
+            if (!world)
+                return 0;
+
+            static const int stepX[] = { 0, -1, 0, 1 };
+            static const int stepZ[] = { 1, 0, -1, 0 };
+
+            const int inputX = x + stepX[dir];
+            const int inputZ = z + stepZ[dir];
+
+            int blockId = 0;
+            int blockData = 0;
+            if (!TryGetWorldBlock(world, inputX, y, inputZ, blockId, blockData))
+                return 0;
+
+            if (blockId == 55)
+                return std::clamp(blockData, 0, 15);
+
+            int directSignal = 0;
+            directSignal = GetMinimalSourcePowerToPosition(
+                blockId, blockData,
+                inputX, y, inputZ,
+                x, y, z);
+            if (directSignal <= 0)
+                directSignal = GetMinimalDiodeOutputToPosition(
+                    world,
+                    blockId, blockData,
+                    inputX, y, inputZ,
+                    x, y, z);
+
+            return std::clamp(directSignal, 0, 15);
+        }
+
+        int GetMinimalComparatorSideSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int dir)
+        {
+            if (!world)
+                return 0;
+
+            static const int leftX[] = { -1, 0, 1, 0 };
+            static const int leftZ[] = { 0, 1, 0, -1 };
+            static const int rightX[] = { 1, 0, -1, 0 };
+            static const int rightZ[] = { 0, -1, 0, 1 };
+
+            auto getSideSignal = [&](int sx, int sy, int sz) -> int
+            {
+                int blockId = 0;
+                int blockData = 0;
+                if (!TryGetWorldBlock(world, sx, sy, sz, blockId, blockData))
+                    return 0;
+
+                if (blockId == 55)
+                    return std::clamp(blockData, 0, 15);
+
+                const int directSourceSignal = GetMinimalSourcePowerToPosition(
+                    blockId, blockData,
+                    sx, sy, sz,
+                    x, y, z);
+                if (directSourceSignal > 0)
+                    return directSourceSignal;
+
+                return std::clamp(
+                    GetMinimalDiodeOutputToPosition(
+                        world,
+                        blockId, blockData,
+                        sx, sy, sz,
+                        x, y, z),
+                    0, 15);
+            };
+
+            const int leftSignal = getSideSignal(x + leftX[dir], y, z + leftZ[dir]);
+            const int rightSignal = getSideSignal(x + rightX[dir], y, z + rightZ[dir]);
+            return (leftSignal > rightSignal) ? leftSignal : rightSignal;
+        }
+
+        int GetMinimalComparatorOutputSignal(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int blockId,
+            int blockData)
+        {
+            if (!world || (blockId != 149 && blockId != 150))
+                return 0;
+
+            const int dir = GetMinimalDiodeDirection(blockData);
+            const int inputSignal = GetMinimalComparatorInputSignal(world, x, y, z, dir);
+            const int sideSignal = GetMinimalComparatorSideSignal(world, x, y, z, dir);
+            const bool subtractMode = (blockData & 0x4) != 0;
+
+            if (subtractMode)
+            {
+                const int outputSignal = inputSignal - sideSignal;
+                return outputSignal > 0 ? outputSignal : 0;
+            }
+
+            if (inputSignal == 0)
+                return 0;
+            if (sideSignal == 0 || inputSignal >= sideSignal)
+                return inputSignal;
+            return 0;
+        }
+
+        bool IsMinimalBlockPoweredAt(
+            World* world,
+            int x,
+            int y,
+            int z,
+            int excludeX,
+            int excludeY,
+            int excludeZ)
+        {
+            if (!world)
+                return false;
+
+            static const int dx[] = { -1, 1, 0, 0, 0, 0 };
+            static const int dy[] = { 0, 0, 0, 0, -1, 1 };
+            static const int dz[] = { 0, 0, -1, 1, 0, 0 };
+
+            for (int i = 0; i < 6; ++i)
+            {
+                const int nx = x + dx[i];
+                const int ny = y + dy[i];
+                const int nz = z + dz[i];
+                if (nx == excludeX && ny == excludeY && nz == excludeZ)
+                    continue;
+
+                int blockId = 0;
+                int blockData = 0;
+                if (!TryGetWorldBlock(world, nx, ny, nz, blockId, blockData))
+                    continue;
+
+                if (blockId == 55 && blockData > 0)
+                    return true;
+
+                if (GetMinimalSourcePowerToPosition(
+                        blockId, blockData,
+                        nx, ny, nz,
+                        x, y, z) > 0)
+                {
+                    return true;
+                }
+
+                if (GetMinimalDiodeOutputToPosition(world, blockId, blockData, nx, ny, nz, x, y, z) > 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        struct RedstonePos
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+        };
+
+        void RecomputeMinimalDustPowerAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            const std::function<void(int, int, int, int, int)>& onDustDataChanged,
+            std::vector<RedstonePos>* changedDustPositions = nullptr)
+        {
+            if (!world)
+                return;
+
+            auto posKey = [](int x, int y, int z) -> int64_t
+            {
+                return (static_cast<int64_t>(x) << 40) ^
+                       (static_cast<int64_t>(y & 0xFF) << 32) ^
+                       static_cast<uint32_t>(z);
+            };
+
+            std::queue<RedstonePos> discoverQueue;
+            std::unordered_set<int64_t> dustSet;
+            std::vector<RedstonePos> dustPositions;
+
+            auto enqueueDustIfPresent = [&](int x, int y, int z)
+            {
+                int blockId = 0;
+                int blockData = 0;
+                if (!TryGetWorldBlock(world, x, y, z, blockId, blockData) || blockId != 55)
+                    return;
+
+                int64_t key = posKey(x, y, z);
+                if (dustSet.insert(key).second)
+                {
+                    discoverQueue.push({x, y, z});
+                    dustPositions.push_back({x, y, z});
+                }
+            };
+
+            enqueueDustIfPresent(originX, originY, originZ);
+            enqueueDustIfPresent(originX, originY + 1, originZ);
+            enqueueDustIfPresent(originX, originY - 1, originZ);
+            enqueueDustIfPresent(originX - 1, originY, originZ);
+            enqueueDustIfPresent(originX + 1, originY, originZ);
+            enqueueDustIfPresent(originX, originY, originZ - 1);
+            enqueueDustIfPresent(originX, originY, originZ + 1);
+
+            static const int neighborDx[] = { -1, 1, 0, 0 };
+            static const int neighborDz[] = { 0, 0, -1, 1 };
+
+            while (!discoverQueue.empty())
+            {
+                RedstonePos current = discoverQueue.front();
+                discoverQueue.pop();
+
+                for (int i = 0; i < 4; ++i)
+                    enqueueDustIfPresent(current.x + neighborDx[i], current.y, current.z + neighborDz[i]);
+            }
+
+            if (dustPositions.empty())
+                return;
+
+            std::unordered_map<int64_t, int> signalByDust;
+            std::queue<RedstonePos> powerQueue;
+
+            for (const RedstonePos& dust : dustPositions)
+            {
+                int sourcePower = GetMinimalDirectDustPower(world, dust.x, dust.y, dust.z);
+                int64_t key = posKey(dust.x, dust.y, dust.z);
+                signalByDust[key] = sourcePower;
+                if (sourcePower > 0)
+                    powerQueue.push(dust);
+            }
+
+            while (!powerQueue.empty())
+            {
+                RedstonePos current = powerQueue.front();
+                powerQueue.pop();
+
+                int64_t currentKey = posKey(current.x, current.y, current.z);
+                int currentSignal = signalByDust[currentKey];
+                if (currentSignal <= 1)
+                    continue;
+
+                for (int i = 0; i < 4; ++i)
+                {
+                    RedstonePos neighbor{ current.x + neighborDx[i], current.y, current.z + neighborDz[i] };
+                    int64_t neighborKey = posKey(neighbor.x, neighbor.y, neighbor.z);
+                    if (dustSet.find(neighborKey) == dustSet.end())
+                        continue;
+
+                    int nextSignal = currentSignal - 1;
+                    auto found = signalByDust.find(neighborKey);
+                    if (found == signalByDust.end() || nextSignal > found->second)
+                    {
+                        signalByDust[neighborKey] = nextSignal;
+                        powerQueue.push(neighbor);
+                    }
+                }
+            }
+
+            for (const RedstonePos& dust : dustPositions)
+            {
+                int blockId = 0;
+                int oldData = 0;
+                if (!TryGetWorldBlock(world, dust.x, dust.y, dust.z, blockId, oldData) || blockId != 55)
+                    continue;
+
+                int64_t key = posKey(dust.x, dust.y, dust.z);
+                int newData = 0;
+                auto found = signalByDust.find(key);
+                if (found != signalByDust.end())
+                    newData = std::clamp(found->second, 0, 15);
+
+                if (oldData == newData)
+                    continue;
+
+                if (world->SetBlock(dust.x, dust.y, dust.z, 55, newData))
+                {
+                    onDustDataChanged(dust.x, dust.y, dust.z, oldData, newData);
+                    if (changedDustPositions)
+                        changedDustPositions->push_back({ dust.x, dust.y, dust.z });
+                }
+            }
+        }
+
+        struct MinimalDiodeChange
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            int oldBlockId = 0;
+            int newBlockId = 0;
+            int blockData = 0;
+            int delayTicks = 0;
+        };
+
+        std::vector<MinimalDiodeChange> CollectMinimalDiodeChangesAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ)
+        {
+            std::vector<MinimalDiodeChange> changes;
+            if (!world)
+                return changes;
+
+            static const int stepX[] = { 0, -1, 0, 1 };
+            static const int stepZ[] = { 1, 0, -1, 0 };
+
+            for (int y = originY - 1; y <= originY + 1; ++y)
+            {
+                for (int x = originX - 2; x <= originX + 2; ++x)
+                {
+                    for (int z = originZ - 2; z <= originZ + 2; ++z)
+                    {
+                        int blockId = 0;
+                        int blockData = 0;
+                        if (!TryGetWorldBlock(world, x, y, z, blockId, blockData) || !IsMinimalDiodeBlock(blockId))
+                            continue;
+
+                        const int dir = GetMinimalDiodeDirection(blockData);
+                        const int inputX = x + stepX[dir];
+                        const int inputZ = z + stepZ[dir];
+
+                        int targetBlockId = blockId;
+                        if (blockId == 93 || blockId == 94)
+                        {
+                            int inputBlockId = 0;
+                            int inputBlockData = 0;
+                            int inputSignal = 0;
+                            if (TryGetWorldBlock(world, inputX, y, inputZ, inputBlockId, inputBlockData))
+                            {
+                                if (inputBlockId == 55)
+                                    inputSignal = inputBlockData;
+                                else if (IsMinimalRedstoneSourceBlock(inputBlockId, inputBlockData) ||
+                                         GetMinimalDiodeOutputToPosition(world, inputBlockId, inputBlockData, inputX, y, inputZ, x, y, z) > 0)
+                                    inputSignal = 15;
+                            }
+
+                            targetBlockId = (inputSignal > 0) ? 94 : 93;
+                        }
+                        else if (blockId == 149 || blockId == 150)
+                        {
+                            const int inputSignal = GetMinimalComparatorInputSignal(world, x, y, z, dir);
+                            const int sideSignal = GetMinimalComparatorSideSignal(world, x, y, z, dir);
+                            const bool shouldTurnOn =
+                                inputSignal >= 15 || (inputSignal > 0 && (sideSignal == 0 || inputSignal >= sideSignal));
+                            targetBlockId = shouldTurnOn ? 150 : 149;
+                        }
+
+                        if (targetBlockId == blockId)
+                            continue;
+
+                        int delayTicks = 0;
+                        if (blockId == 93 || blockId == 94)
+                            delayTicks = (((blockData & 0xC) >> 2) + 1) * 2;
+                        else if (blockId == 149 || blockId == 150)
+                            delayTicks = 2;
+
+                        changes.push_back({x, y, z, blockId, targetBlockId, blockData, delayTicks});
+                    }
+                }
+            }
+
+            return changes;
+        }
+
+        void AppendUniqueMinimalDiodeChangesAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            std::vector<MinimalDiodeChange>& outChanges,
+            std::unordered_set<int64_t>& seenPositions)
+        {
+            auto posKey = [](int x, int y, int z) -> int64_t
+            {
+                return (static_cast<int64_t>(x) << 40) ^
+                       (static_cast<int64_t>(y & 0xFF) << 32) ^
+                       static_cast<uint32_t>(z);
+            };
+
+            std::vector<MinimalDiodeChange> localChanges =
+                CollectMinimalDiodeChangesAround(world, originX, originY, originZ);
+            for (const MinimalDiodeChange& change : localChanges)
+            {
+                const int64_t key = posKey(change.x, change.y, change.z);
+                if (!seenPositions.insert(key).second)
+                    continue;
+                outChanges.push_back(change);
+            }
+        }
+
+        void AppendUniqueMinimalTorchChangesAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            std::vector<MinimalDiodeChange>& outChanges,
+            std::unordered_set<int64_t>& seenPositions)
+        {
+            auto posKey = [](int x, int y, int z) -> int64_t
+            {
+                return (static_cast<int64_t>(x) << 40) ^
+                       (static_cast<int64_t>(y & 0xFF) << 32) ^
+                       static_cast<uint32_t>(z);
+            };
+
+            for (int y = originY - 2; y <= originY + 2; ++y)
+            {
+                for (int x = originX - 2; x <= originX + 2; ++x)
+                {
+                    for (int z = originZ - 2; z <= originZ + 2; ++z)
+                    {
+                        int blockId = 0;
+                        int blockData = 0;
+                        if (!TryGetWorldBlock(world, x, y, z, blockId, blockData) ||
+                            !IsMinimalRedstoneTorchBlock(blockId))
+                        {
+                            continue;
+                        }
+
+                        int supportX = 0;
+                        int supportY = 0;
+                        int supportZ = 0;
+                        if (!TryGetMinimalTorchSupportPosition(blockData, x, y, z, supportX, supportY, supportZ))
+                            continue;
+
+                        const bool supportPowered =
+                            IsMinimalBlockPoweredAt(world, supportX, supportY, supportZ, x, y, z);
+                        int targetBlockId = blockId;
+                        if (blockId == 76 && supportPowered)
+                            targetBlockId = 75;
+                        else if (blockId == 75 && !supportPowered)
+                            targetBlockId = 76;
+
+                        if (targetBlockId == blockId)
+                            continue;
+
+                        const int64_t key = posKey(x, y, z);
+                        if (!seenPositions.insert(key).second)
+                            continue;
+
+                        outChanges.push_back({x, y, z, blockId, targetBlockId, blockData, 2});
+                    }
+                }
+            }
+        }
+
+        bool TryGetMinimalDiodeOutputPosition(
+            int blockId,
+            int blockData,
+            int sourceX,
+            int sourceY,
+            int sourceZ,
+            int& outX,
+            int& outY,
+            int& outZ)
+        {
+            if (!IsMinimalDiodeBlock(blockId))
+                return false;
+
+            static const int stepX[] = { 0, -1, 0, 1 };
+            static const int stepZ[] = { 1, 0, -1, 0 };
+            const int dir = GetMinimalDiodeDirection(blockData);
+            outX = sourceX - stepX[dir];
+            outY = sourceY;
+            outZ = sourceZ - stepZ[dir];
+            return true;
+        }
+
+        void RecomputeMinimalDustAtNearbyDiodeOutputs(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            const std::function<void(int, int, int, int, int)>& onDustDataChanged)
+        {
+            if (!world)
+                return;
+
+            std::unordered_set<int64_t> refreshedOutputs;
+            auto outputKey = [](int x, int y, int z) -> int64_t
+            {
+                return (static_cast<int64_t>(x) << 40) ^
+                       (static_cast<int64_t>(y & 0xFF) << 32) ^
+                       static_cast<uint32_t>(z);
+            };
+
+            for (int y = originY - 1; y <= originY + 1; ++y)
+            {
+                for (int x = originX - 2; x <= originX + 2; ++x)
+                {
+                    for (int z = originZ - 2; z <= originZ + 2; ++z)
+                    {
+                        int blockId = 0;
+                        int blockData = 0;
+                        if (!TryGetWorldBlock(world, x, y, z, blockId, blockData) || !IsMinimalDiodeBlock(blockId))
+                            continue;
+
+                        int outputX = 0;
+                        int outputY = 0;
+                        int outputZ = 0;
+                        if (!TryGetMinimalDiodeOutputPosition(blockId, blockData, x, y, z, outputX, outputY, outputZ))
+                            continue;
+
+                        const int64_t key = outputKey(outputX, outputY, outputZ);
+                        if (!refreshedOutputs.insert(key).second)
+                            continue;
+
+                        RecomputeMinimalDustPowerAround(world, outputX, outputY, outputZ, onDustDataChanged);
+                    }
+                }
+            }
+        }
+
+        void RefreshMinimalRedstoneAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            const std::function<void(int, int, int, int, int, int, int)>& onBlockChanged,
+            const std::function<void(int, int, int, int, int)>& onDustDataChanged,
+            const std::function<void(int, int, int, int, int, int, int)>& onScheduleDiodeChange)
+        {
+            if (!world)
+                return;
+
+            std::vector<RedstonePos> changedDustPositions;
+            RecomputeMinimalDustPowerAround(
+                world, originX, originY, originZ, onDustDataChanged, &changedDustPositions);
+
+            bool anyImmediateDiodeChange = false;
+            std::vector<MinimalDiodeChange> diodeChanges;
+            std::unordered_set<int64_t> seenDiodePositions;
+            AppendUniqueMinimalDiodeChangesAround(
+                world, originX, originY, originZ, diodeChanges, seenDiodePositions);
+            AppendUniqueMinimalTorchChangesAround(
+                world, originX, originY, originZ, diodeChanges, seenDiodePositions);
+            for (const RedstonePos& dust : changedDustPositions)
+            {
+                AppendUniqueMinimalDiodeChangesAround(
+                    world, dust.x, dust.y, dust.z, diodeChanges, seenDiodePositions);
+                AppendUniqueMinimalTorchChangesAround(
+                    world, dust.x, dust.y, dust.z, diodeChanges, seenDiodePositions);
+            }
+
+            for (const MinimalDiodeChange& change : diodeChanges)
+            {
+                if (change.delayTicks > 0)
+                {
+                    onScheduleDiodeChange(
+                        change.x, change.y, change.z,
+                        change.oldBlockId, change.newBlockId, change.blockData, change.delayTicks);
+                    continue;
+                }
+
+                if (world->SetBlock(change.x, change.y, change.z, change.newBlockId, change.blockData))
+                {
+                    anyImmediateDiodeChange = true;
+                    onBlockChanged(change.x, change.y, change.z,
+                        change.newBlockId, change.blockData,
+                        change.oldBlockId, change.blockData);
+                    RecomputeMinimalDustPowerAround(world, change.x, change.y, change.z, onDustDataChanged);
+                }
+            }
+
+            RecomputeMinimalDustAtNearbyDiodeOutputs(world, originX, originY, originZ, onDustDataChanged);
+            for (const RedstonePos& dust : changedDustPositions)
+                RecomputeMinimalDustAtNearbyDiodeOutputs(world, dust.x, dust.y, dust.z, onDustDataChanged);
+
+            if (anyImmediateDiodeChange)
+                RecomputeMinimalDustPowerAround(world, originX, originY, originZ, onDustDataChanged);
+        }
+
+        int GetPistonFacingForPlacement(int x, int y, int z, double playerX, double playerY, double playerZ, float yRot)
+        {
+            if (std::abs(playerX - x) < 2.0 && std::abs(playerZ - z) < 2.0)
+            {
+                const double py = playerY + 1.62;
+                if (py - y > 2.0)
+                    return 1; // Facing::UP
+                if (y - py > 0.0)
+                    return 0; // Facing::DOWN
+            }
+
+            const int dir = (static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 0x3;
+            switch (dir)
+            {
+            case 0: return 2; // Facing::NORTH
+            case 1: return 5; // Facing::EAST
+            case 2: return 3; // Facing::SOUTH
+            default: return 4; // Facing::WEST
+            }
+        }
+
+        int GetDiodeDirectionFromPlayerYaw(float yRot)
+        {
+            return (((static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 3) + 2) % 4;
+        }
     }
 
     int64_t Connection::MakeChunkKey(int cx, int cz)
@@ -320,7 +1392,10 @@ namespace LCEServer
     {
     }
 
-    Connection::~Connection() {}
+    Connection::~Connection()
+    {
+        ReleaseVisibleChunks(false);
+    }
 
     void Connection::OnDataReceived(const uint8_t* data, int size)
     {
@@ -334,6 +1409,221 @@ namespace LCEServer
         if (m_done) return;
 
         m_tickCount++;
+
+        auto getWorldBlock = [this](int x, int y, int z, int& outBlockId, int& outBlockData)
+        {
+            return TryGetWorldBlock(m_world, x, y, z, outBlockId, outBlockData);
+        };
+
+        auto scheduleAwareRedstoneRefresh = [this](int x, int y, int z)
+        {
+            if (!m_world)
+                return;
+
+            RefreshMinimalRedstoneAround(
+                m_world,
+                x, y, z,
+                [this](int bx, int by, int bz, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, bx, by, bz, newBlockId, newBlockData, oldBlockId, oldBlockData);
+                },
+                [this](int dx, int dy, int dz, int oldData, int newData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, dx, dy, dz, 55, newData, 55, oldData);
+                },
+                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+                {
+                    m_pendingDiodeTransitions.erase(
+                        std::remove_if(
+                            m_pendingDiodeTransitions.begin(),
+                            m_pendingDiodeTransitions.end(),
+                            [&](const PendingDiodeTransition& pending)
+                            {
+                                return pending.x == dx && pending.y == dy && pending.z == dz;
+                            }),
+                        m_pendingDiodeTransitions.end());
+
+                    PendingDiodeTransition pending;
+                    pending.x = dx;
+                    pending.y = dy;
+                    pending.z = dz;
+                    pending.expectedBlockId = expectedBlockId;
+                    pending.targetBlockId = targetBlockId;
+                    pending.blockData = blockData;
+                    pending.ticksRemaining = delayTicks;
+                    m_pendingDiodeTransitions.push_back(pending);
+                });
+        };
+
+        auto ensurePressurePlateCheck = [this](int x, int y, int z, int blockId)
+        {
+            for (PendingPressurePlateCheck& pending : m_pendingPressurePlateChecks)
+            {
+                if (pending.x == x && pending.y == y && pending.z == z)
+                {
+                    pending.blockId = blockId;
+                    pending.ticksRemaining = 20;
+                    return;
+                }
+            }
+
+            PendingPressurePlateCheck pending;
+            pending.x = x;
+            pending.y = y;
+            pending.z = z;
+            pending.blockId = blockId;
+            pending.ticksRemaining = 20;
+            m_pendingPressurePlateChecks.push_back(pending);
+        };
+
+        auto updatePressurePlateState = [this, &getWorldBlock, &scheduleAwareRedstoneRefresh, &ensurePressurePlateCheck](
+            int x,
+            int y,
+            int z) -> bool
+        {
+            if (!m_world)
+                return false;
+
+            int blockId = 0;
+            int blockData = 0;
+            if (!getWorldBlock(x, y, z, blockId, blockData) || !IsPressurePlateBlock(blockId))
+                return false;
+
+            const bool occupied = isPressurePlateOccupied ? isPressurePlateOccupied(x, y, z, blockId == 72) : false;
+            const int targetData = occupied ? 1 : 0;
+            if (blockData == targetData)
+            {
+                if (occupied)
+                    ensurePressurePlateCheck(x, y, z, blockId);
+                return occupied;
+            }
+
+            if (!m_world->SetBlock(x, y, z, blockId, targetData))
+                return occupied;
+
+            if (onBlockUpdate)
+                onBlockUpdate(this, x, y, z, blockId, targetData, blockId, blockData);
+
+            scheduleAwareRedstoneRefresh(x, y, z);
+            if (occupied)
+                ensurePressurePlateCheck(x, y, z, blockId);
+            return occupied;
+        };
+
+        if (m_world &&
+            (!m_pendingButtonReleases.empty() ||
+             !m_pendingDiodeTransitions.empty() ||
+             !m_pendingPressurePlateChecks.empty()))
+        {
+
+            for (size_t i = 0; i < m_pendingDiodeTransitions.size();)
+            {
+                PendingDiodeTransition& pending = m_pendingDiodeTransitions[i];
+                if (--pending.ticksRemaining > 0)
+                {
+                    ++i;
+                    continue;
+                }
+
+                int currentBlockId = 0;
+                int currentBlockData = 0;
+                const bool sameExpectedBlock =
+                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
+                    currentBlockId == pending.expectedBlockId &&
+                    currentBlockData == pending.blockData;
+
+                if (sameExpectedBlock &&
+                    m_world->SetBlock(pending.x, pending.y, pending.z, pending.targetBlockId, pending.blockData))
+                {
+                    if (onBlockUpdate)
+                    {
+                        onBlockUpdate(this, pending.x, pending.y, pending.z,
+                            pending.targetBlockId, pending.blockData,
+                            pending.expectedBlockId, pending.blockData);
+                    }
+                    scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                }
+
+                m_pendingDiodeTransitions.erase(
+                    m_pendingDiodeTransitions.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+
+            for (size_t i = 0; i < m_pendingButtonReleases.size();)
+            {
+                PendingButtonRelease& pending = m_pendingButtonReleases[i];
+                if (--pending.ticksRemaining > 0)
+                {
+                    ++i;
+                    continue;
+                }
+
+                int currentBlockId = 0;
+                int currentBlockData = 0;
+                const bool samePressedButton =
+                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
+                    currentBlockId == pending.blockId &&
+                    (currentBlockData & 0x8) != 0;
+
+                if (samePressedButton &&
+                    m_world->SetBlock(pending.x, pending.y, pending.z, pending.blockId, pending.baseData) &&
+                    onBlockUpdate)
+                {
+                    onBlockUpdate(this, pending.x, pending.y, pending.z,
+                        pending.blockId, pending.baseData,
+                        pending.blockId, currentBlockData);
+                    scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                }
+
+                m_pendingButtonReleases.erase(m_pendingButtonReleases.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+
+            for (size_t i = 0; i < m_pendingPressurePlateChecks.size();)
+            {
+                PendingPressurePlateCheck& pending = m_pendingPressurePlateChecks[i];
+                if (--pending.ticksRemaining > 0)
+                {
+                    ++i;
+                    continue;
+                }
+
+                int currentBlockId = 0;
+                int currentBlockData = 0;
+                const bool samePressedPlate =
+                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
+                    currentBlockId == pending.blockId &&
+                    IsPressurePlateBlock(currentBlockId) &&
+                    (currentBlockData & 0x1) != 0;
+
+                if (samePressedPlate)
+                {
+                    const bool occupied =
+                        isPressurePlateOccupied ? isPressurePlateOccupied(
+                            pending.x, pending.y, pending.z, currentBlockId == 72) : false;
+                    if (occupied)
+                    {
+                        pending.ticksRemaining = 20;
+                        ++i;
+                        continue;
+                    }
+
+                    if (m_world->SetBlock(pending.x, pending.y, pending.z, currentBlockId, 0))
+                    {
+                        if (onBlockUpdate)
+                        {
+                            onBlockUpdate(this, pending.x, pending.y, pending.z,
+                                currentBlockId, 0,
+                                currentBlockId, currentBlockData);
+                        }
+                        scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                    }
+                }
+
+                m_pendingPressurePlateChecks.erase(
+                    m_pendingPressurePlateChecks.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+        }
 
         // Drain packet queue
         std::vector<std::vector<uint8_t>> packets;
@@ -471,6 +1761,14 @@ namespace LCEServer
             }
         }
 
+        if (m_world && m_state == ConnectionState::Playing && isPressurePlateOccupied)
+        {
+            const int plateX = static_cast<int>(std::floor(m_x));
+            const int plateY = static_cast<int>(std::floor(m_y));
+            const int plateZ = static_cast<int>(std::floor(m_z));
+            updatePressurePlateState(plateX, plateY, plateZ);
+        }
+
         // Send keepalive every 20 ticks when playing
         // (matches Connection::tick from source)
         if (m_state == ConnectionState::Playing &&
@@ -497,6 +1795,7 @@ namespace LCEServer
         if (m_done) return;
         Logger::Info("Server", "Disconnecting smallId=%d reason=%d",
                      m_smallId, (int)reason);
+        ReleaseVisibleChunks(false);
         SendPacket(PacketHandler::WriteDisconnect(reason));
         m_done = true;
         m_state = ConnectionState::Closing;
@@ -1019,19 +2318,30 @@ namespace LCEServer
         StreamChunksAround(spawnCX, spawnCZ, true);
     }
 
+    void Connection::ReleaseVisibleChunks(bool sendHidePackets)
+    {
+        if (m_visibleChunks.empty())
+            return;
+
+        for (int64_t key : m_visibleChunks)
+        {
+            int cx = static_cast<int>(key >> 32);
+            int cz = static_cast<int>(static_cast<uint32_t>(key));
+            if (sendHidePackets)
+                SendPacket(PacketHandler::WriteChunkVisibility(cx, cz, false));
+            if (onChunkVisibility)
+                onChunkVisibility(cx, cz, -1);
+        }
+
+        m_visibleChunks.clear();
+    }
+
     void Connection::StreamChunksAround(
         int centerCX, int centerCZ, bool fullResync)
     {
         if (fullResync)
         {
-            for (int64_t key : m_visibleChunks)
-            {
-                int oldCX = static_cast<int>(key >> 32);
-                int oldCZ = static_cast<int>(static_cast<uint32_t>(key));
-                SendPacket(PacketHandler::WriteChunkVisibility(
-                    oldCX, oldCZ, false));
-            }
-            m_visibleChunks.clear();
+            ReleaseVisibleChunks(true);
         }
 
         std::unordered_set<int64_t> wanted;
@@ -1214,48 +2524,243 @@ namespace LCEServer
 
         Logger::Debug("Server", "PlayerAction '%ls' action=%d pos=(%d,%d,%d) face=%d",
             m_playerName.c_str(), act.action, act.x, act.y, act.z, act.face);
+        Logger::Info("ACTION-DBG", "'%ls' action=%d pos=(%d,%d,%d) face=%d",
+            m_playerName.c_str(), act.action, act.x, act.y, act.z, act.face);
 
         bool isCreative = (m_gameMode == 1);
 
         // Creative: break on START_DESTROY (action=0) — instant break
         // Survival: break on STOP_DESTROY  (action=2) — animation completed
-        // All other actions (abort=1, drop=3...) don't mutate the world
-        bool shouldBreak = (isCreative && act.action == 0) ||
-                           (!isCreative && act.action == 2);
-        if (!shouldBreak)
-            return;
-
+        // LCE clients sometimes only surface ABORT for zero-destroy-time tiles
+        // during rapid targeting changes, so treat ABORT as a valid break for
+        // instant-break blocks to keep the authoritative world in sync.
+        // All other actions (drop=3...) don't mutate the world.
         if (!m_world) return;
         if (act.y < 0 || act.y >= LEGACY_WORLD_HEIGHT) return;
 
+        auto getWorldBlock = [&](int x, int y, int z, int& outBlockId, int& outBlockData)
+        {
+            outBlockId = 0;
+            outBlockData = 0;
+            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+                return false;
+
+            ChunkData* existingChunk = m_world->GetChunk(x >> 4, z >> 4);
+            if (!existingChunk || existingChunk->blocks.empty())
+                return false;
+
+            int lx = ((x % 16) + 16) % 16;
+            int lz = ((z % 16) + 16) % 16;
+            int idx = ChunkBlockIndex(lx, lz, y);
+            if (idx < 0 || idx >= static_cast<int>(existingChunk->blocks.size()))
+                return false;
+
+            outBlockId = existingChunk->blocks[idx];
+            if (!existingChunk->data.empty())
+            {
+                int nibbleIndex = idx >> 1;
+                uint8_t packed = existingChunk->data[nibbleIndex];
+                outBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+            }
+            return true;
+        };
+
+        auto breakBlockAt = [&](int x, int y, int z)
+        {
+            int oldBlockId = 0;
+            int oldBlockData = 0;
+            if (!getWorldBlock(x, y, z, oldBlockId, oldBlockData) || oldBlockId == 0)
+                return false;
+
+            ChunkData* chunk = m_world->SetBlock(x, y, z, 0, 0);
+            if (!chunk)
+                return false;
+
+            if (onBlockUpdate)
+                onBlockUpdate(this, x, y, z, 0, 0, oldBlockId, oldBlockData);
+
+            RefreshMinimalRedstoneAround(
+                m_world,
+                x, y, z,
+                [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+                },
+                [this](int dustX, int dustY, int dustZ, int previousData, int newData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
+                },
+                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+                {
+                    m_pendingDiodeTransitions.erase(
+                        std::remove_if(
+                            m_pendingDiodeTransitions.begin(),
+                            m_pendingDiodeTransitions.end(),
+                            [&](const PendingDiodeTransition& pending)
+                            {
+                                return pending.x == dx && pending.y == dy && pending.z == dz;
+                            }),
+                        m_pendingDiodeTransitions.end());
+
+                    PendingDiodeTransition pending;
+                    pending.x = dx;
+                    pending.y = dy;
+                    pending.z = dz;
+                    pending.expectedBlockId = expectedBlockId;
+                    pending.targetBlockId = targetBlockId;
+                    pending.blockData = blockData;
+                    pending.ticksRemaining = delayTicks;
+                    m_pendingDiodeTransitions.push_back(pending);
+                });
+            return true;
+        };
+
+        int targetX = act.x;
+        int targetY = act.y;
+        int targetZ = act.z;
+
         int oldBlockId = 0;
         int oldBlockData = 0;
-        ChunkData* existingChunk = m_world->GetChunk(act.x >> 4, act.z >> 4);
-        if (existingChunk && !existingChunk->blocks.empty())
+        bool hasTargetBlock = getWorldBlock(targetX, targetY, targetZ, oldBlockId, oldBlockData) && oldBlockId != 0;
+
+        auto tryRetargetCandidate = [&](int candidateX, int candidateY, int candidateZ)
         {
-            int lx = ((act.x % 16) + 16) % 16;
-            int lz = ((act.z % 16) + 16) % 16;
-            int idx = ChunkBlockIndex(lx, lz, act.y);
-            if (idx >= 0 && idx < (int)existingChunk->blocks.size())
+            if (candidateY < 0 || candidateY >= LEGACY_WORLD_HEIGHT)
+                return false;
+
+            int candidateBlockId = 0;
+            int candidateBlockData = 0;
+            if (!getWorldBlock(candidateX, candidateY, candidateZ, candidateBlockId, candidateBlockData) ||
+                candidateBlockId == 0 ||
+                !IsRetargetableInstantBreakBlock(candidateBlockId))
             {
-                oldBlockId = existingChunk->blocks[idx];
-                if (!existingChunk->data.empty())
-                {
-                    int nibbleIndex = idx >> 1;
-                    uint8_t packed = existingChunk->data[nibbleIndex];
-                    oldBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-                }
+                return false;
+            }
+
+            if (hasTargetBlock && IsInstantBreakBlock(oldBlockId))
+                return false;
+
+            targetX = candidateX;
+            targetY = candidateY;
+            targetZ = candidateZ;
+            oldBlockId = candidateBlockId;
+            oldBlockData = candidateBlockData;
+            hasTargetBlock = true;
+            Logger::Info("ACTION-DBG",
+                "'%ls' retarget break from (%d,%d,%d) to (%d,%d,%d) block=%d data=%d",
+                m_playerName.c_str(),
+                act.x, act.y, act.z,
+                targetX, targetY, targetZ,
+                oldBlockId, oldBlockData);
+            return true;
+        };
+
+        if (act.y + 1 >= 0 && act.y + 1 < LEGACY_WORLD_HEIGHT)
+        {
+            if (!tryRetargetCandidate(act.x, act.y + 1, act.z) &&
+                act.face >= 0 && act.face <= 5)
+            {
+                int adjacentX = act.x;
+                int adjacentY = act.y;
+                int adjacentZ = act.z;
+                OffsetByFace(act.face, adjacentX, adjacentY, adjacentZ);
+
+                if (!tryRetargetCandidate(adjacentX, adjacentY, adjacentZ))
+                    tryRetargetCandidate(adjacentX, adjacentY + 1, adjacentZ);
             }
         }
 
-        ChunkData* chunk = m_world->SetBlock(act.x, act.y, act.z, 0, 0);
-        if (!chunk) return;
+        if (!hasTargetBlock)
+        {
+            Logger::Info("ACTION-DBG", "'%ls' action=%d targetState=air pos=(%d,%d,%d)",
+                m_playerName.c_str(), act.action, targetX, targetY, targetZ);
+            return;
+        }
+
+        const bool instantBreak = IsInstantBreakBlock(oldBlockId);
+        const bool shouldBreak = (isCreative && act.action == 0) ||
+                                 (!isCreative && act.action == 2) ||
+                                 (!isCreative && instantBreak && (act.action == 0 || act.action == 1));
+        const bool redstoneDebug = IsRedstoneDebugBlock(oldBlockId);
+
+        if (redstoneDebug)
+        {
+            Logger::Info("REDSTONE-DBG",
+                "'%ls' break action=%d block=%d data=%d instant=%d shouldBreak=%d pos=(%d,%d,%d)",
+                m_playerName.c_str(),
+                act.action,
+                oldBlockId,
+                oldBlockData,
+                instantBreak ? 1 : 0,
+                shouldBreak ? 1 : 0,
+                targetX, targetY, targetZ);
+        }
+
+        if (!shouldBreak)
+        {
+            if (act.action == 1 || act.action == 2)
+            {
+                int wireBlockId = (oldBlockId == 0) ? 255 : oldBlockId;
+                SendPacket(PacketHandler::WriteTileUpdate(
+                    targetX, targetY, targetZ, wireBlockId, oldBlockData, 0));
+
+                if (redstoneDebug)
+                {
+                    Logger::Info("REDSTONE-DBG",
+                        "'%ls' resync action=%d block=%d data=%d pos=(%d,%d,%d)",
+                        m_playerName.c_str(),
+                        act.action,
+                        oldBlockId,
+                        oldBlockData,
+                        targetX, targetY, targetZ);
+                }
+            }
+            return;
+        }
+
+        const bool brokePrimary = breakBlockAt(targetX, targetY, targetZ);
+        if (redstoneDebug)
+        {
+            int newBlockId = -1;
+            int newBlockData = -1;
+            bool hasBlockAfter = getWorldBlock(targetX, targetY, targetZ, newBlockId, newBlockData);
+            Logger::Info("REDSTONE-DBG",
+                "'%ls' break result broke=%d afterBlock=%d afterData=%d hasBlock=%d pos=(%d,%d,%d)",
+                m_playerName.c_str(),
+                brokePrimary ? 1 : 0,
+                hasBlockAfter ? newBlockId : -1,
+                hasBlockAfter ? newBlockData : -1,
+                hasBlockAfter ? 1 : 0,
+                targetX, targetY, targetZ);
+        }
+
+        if (oldBlockId == 64 || oldBlockId == 71) // doors
+        {
+            const bool isUpper = (oldBlockData & 0x8) != 0;
+            const int otherY = isUpper ? (targetY - 1) : (targetY + 1);
+            if (otherY >= 0 && otherY < LEGACY_WORLD_HEIGHT)
+                breakBlockAt(targetX, otherY, targetZ);
+        }
+        else if (oldBlockId == 26) // bed
+        {
+            const bool isHead = (oldBlockData & 0x8) != 0;
+            const int dir = oldBlockData & 0x3;
+            int dx = 0;
+            int dz = 0;
+            if (dir == 0) dz = 1;
+            else if (dir == 1) dx = -1;
+            else if (dir == 2) dz = -1;
+            else dx = 1;
+
+            const int otherX = isHead ? (targetX - dx) : (targetX + dx);
+            const int otherZ = isHead ? (targetZ - dz) : (targetZ + dz);
+            breakBlockAt(otherX, targetY, otherZ);
+        }
 
         Logger::Info("Server", "'%ls' broke block at (%d,%d,%d)",
-            m_playerName.c_str(), act.x, act.y, act.z);
-
-        if (onBlockUpdate)
-            onBlockUpdate(this, act.x, act.y, act.z, 0, 0, oldBlockId, oldBlockData);
+            m_playerName.c_str(), targetX, targetY, targetZ);
     }
 
     // ---------------------------------------------------------------
@@ -1380,6 +2885,58 @@ namespace LCEServer
                 }
             };
 
+            auto recomputeMinimalRedstoneAround = [&](int x, int y, int z)
+            {
+                RefreshMinimalRedstoneAround(
+                    m_world,
+                    x, y, z,
+                    [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+                    {
+                        if (onBlockUpdate)
+                            onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+                    },
+                    [this](int dustX, int dustY, int dustZ, int oldData, int newData)
+                    {
+                        if (onBlockUpdate)
+                            onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, oldData);
+                    },
+                    [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+                    {
+                        m_pendingDiodeTransitions.erase(
+                            std::remove_if(
+                                m_pendingDiodeTransitions.begin(),
+                                m_pendingDiodeTransitions.end(),
+                                [&](const PendingDiodeTransition& pending)
+                                {
+                                    return pending.x == dx && pending.y == dy && pending.z == dz;
+                                }),
+                            m_pendingDiodeTransitions.end());
+
+                        PendingDiodeTransition pending;
+                        pending.x = dx;
+                        pending.y = dy;
+                        pending.z = dz;
+                        pending.expectedBlockId = expectedBlockId;
+                        pending.targetBlockId = targetBlockId;
+                        pending.blockData = blockData;
+                        pending.ticksRemaining = delayTicks;
+                        m_pendingDiodeTransitions.push_back(pending);
+                    });
+            };
+
+            auto clearPendingDiodeTransition = [&](int x, int y, int z)
+            {
+                m_pendingDiodeTransitions.erase(
+                    std::remove_if(
+                        m_pendingDiodeTransitions.begin(),
+                        m_pendingDiodeTransitions.end(),
+                        [&](const PendingDiodeTransition& pending)
+                        {
+                            return pending.x == x && pending.y == y && pending.z == z;
+                        }),
+                    m_pendingDiodeTransitions.end());
+            };
+
             ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
             if (clickedChunk && !clickedChunk->blocks.empty() &&
                 use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
@@ -1387,12 +2944,103 @@ namespace LCEServer
                 int lx = ((use.x % 16) + 16) % 16;
                 int lz = ((use.z % 16) + 16) % 16;
                 int idx = ChunkBlockIndex(lx, lz, use.y);
-                if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()) &&
-                    clickedChunk->blocks[idx] == 58)
+                if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
                 {
-                    resyncPlacementPrediction();
-                    OpenWorkbenchContainer(use.x, use.y, use.z);
-                    return;
+                    if (clickedChunk->blocks[idx] == 58)
+                    {
+                        resyncPlacementPrediction();
+                        OpenWorkbenchContainer(use.x, use.y, use.z);
+                        return;
+                    }
+
+                    int clickedBlockId = clickedChunk->blocks[idx];
+                    int clickedBlockData = 0;
+                    if (!clickedChunk->data.empty())
+                    {
+                        int nibbleIndex = idx >> 1;
+                        uint8_t packed = clickedChunk->data[nibbleIndex];
+                        clickedBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                    }
+
+                    if (clickedBlockId == 93 || clickedBlockId == 94)
+                    {
+                        const int newBlockData = (((clickedBlockData & 0xC) + 0x4) & 0xC) | (clickedBlockData & 0x3);
+                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
+                            onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                        resyncPlacementPrediction();
+                        return;
+                    }
+
+                    if (clickedBlockId == 149 || clickedBlockId == 150)
+                    {
+                        const int newBlockData = clickedBlockData ^ 0x4;
+                        clearPendingDiodeTransition(use.x, use.y, use.z);
+
+                        const int dir = GetMinimalDiodeDirection(newBlockData);
+                        const int inputSignal = GetMinimalComparatorInputSignal(m_world, use.x, use.y, use.z, dir);
+                        const int sideSignal = GetMinimalComparatorSideSignal(m_world, use.x, use.y, use.z, dir);
+                        const bool shouldTurnOn =
+                            inputSignal >= 15 || (inputSignal > 0 && (sideSignal == 0 || inputSignal >= sideSignal));
+                        const int targetBlockId = shouldTurnOn ? 150 : 149;
+
+                        if (m_world->SetBlock(use.x, use.y, use.z, targetBlockId, newBlockData))
+                        {
+                            if (onBlockUpdate)
+                                onBlockUpdate(this, use.x, use.y, use.z, targetBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                            recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                        }
+                        resyncPlacementPrediction();
+                        return;
+                    }
+
+                    if (clickedBlockId == 69)
+                    {
+                        const int newBlockData = clickedBlockData ^ 0x8;
+                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
+                        {
+                            onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                            recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                        }
+                        resyncPlacementPrediction();
+                        return;
+                    }
+
+                    if (clickedBlockId == 77 || clickedBlockId == 143)
+                    {
+                        if ((clickedBlockData & 0x8) == 0)
+                        {
+                            const int newBlockData = clickedBlockData | 0x8;
+                            if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
+                            {
+                                onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                                recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                            }
+
+                            m_pendingButtonReleases.erase(
+                                std::remove_if(
+                                    m_pendingButtonReleases.begin(),
+                                    m_pendingButtonReleases.end(),
+                                    [&](const PendingButtonRelease& pending)
+                                    {
+                                        return pending.x == use.x &&
+                                               pending.y == use.y &&
+                                               pending.z == use.z;
+                                    }),
+                                m_pendingButtonReleases.end());
+
+                            PendingButtonRelease pending;
+                            pending.x = use.x;
+                            pending.y = use.y;
+                            pending.z = use.z;
+                            pending.blockId = clickedBlockId;
+                            pending.baseData = clickedBlockData & 0x7;
+                            pending.ticksRemaining = (clickedBlockId == 143) ? 30 : 20;
+                            m_pendingButtonReleases.push_back(pending);
+                        }
+
+                        resyncPlacementPrediction();
+                        return;
+                    }
                 }
             }
         }
@@ -1633,7 +3281,7 @@ namespace LCEServer
         auto isTopSolidBlocking = [&](int x, int y, int z) -> bool
         {
             int blockId = getWorldBlockId(x, y, z);
-            return blockId != 0 && !IsReplaceableBlock(blockId);
+            return IsTopSolidSupportBlock(blockId);
         };
 
         auto consumeSelectedPlacementItem = [&]()
@@ -1654,6 +3302,50 @@ namespace LCEServer
             if (onBlockUpdate)
                 onBlockUpdate(this, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
         };
+
+        const int clickedBlockIdForPlacement = getWorldBlockId(use.x, use.y, use.z);
+        const int clickedBlockDataForPlacement = getWorldBlockData(use.x, use.y, use.z);
+        px = use.x;
+        py = use.y;
+        pz = use.z;
+
+        if (use.face != -1)
+        {
+            const int face = use.face & 0xFF;
+            bool resolvedTarget = false;
+
+            if (use.itemId == 331)
+            {
+                resolvedTarget = ResolveRedstoneDustPlacementTarget(
+                    clickedBlockIdForPlacement,
+                    use.x,
+                    use.y,
+                    use.z,
+                    face,
+                    px,
+                    py,
+                    pz);
+            }
+            else
+            {
+                resolvedTarget = ResolveTilePlanterPlacementTarget(
+                    clickedBlockIdForPlacement,
+                    clickedBlockDataForPlacement,
+                    use.x,
+                    use.y,
+                    use.z,
+                    face,
+                    px,
+                    py,
+                    pz);
+            }
+
+            if (!resolvedTarget)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+        }
 
         if (use.itemId == 355) // bed
         {
@@ -1793,9 +3485,112 @@ namespace LCEServer
         {
             placedBlockData = GetRotatedPillarDataFromFace(use.itemDamage, use.face);
         }
+        else if (placedBlockId == 69) // lever
+        {
+            const int yawDir = (static_cast<int>(std::floor(m_yRot * 4.0 / 360.0 + 0.5))) & 1;
+            int leverData = -1;
+            if (use.face == 0 && IsTopSolidSupportBlock(getWorldBlockId(px, py + 1, pz)))
+                leverData = yawDir == 0 ? 7 : 0;
+            else if (use.face == 1 && isTopSolidBlocking(px, py - 1, pz))
+                leverData = yawDir == 0 ? 5 : 6;
+            else if (use.face == 2 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz + 1)))
+                leverData = 4;
+            else if (use.face == 3 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz - 1)))
+                leverData = 3;
+            else if (use.face == 4 && IsTopSolidSupportBlock(getWorldBlockId(px + 1, py, pz)))
+                leverData = 2;
+            else if (use.face == 5 && IsTopSolidSupportBlock(getWorldBlockId(px - 1, py, pz)))
+                leverData = 1;
+
+            if (leverData < 0)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+            placedBlockData = leverData;
+        }
+        else if (placedBlockId == 77 || placedBlockId == 143) // buttons
+        {
+            int buttonData = -1;
+            if (use.face == 2 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz + 1)))
+                buttonData = 4;
+            else if (use.face == 3 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz - 1)))
+                buttonData = 3;
+            else if (use.face == 4 && IsTopSolidSupportBlock(getWorldBlockId(px + 1, py, pz)))
+                buttonData = 2;
+            else if (use.face == 5 && IsTopSolidSupportBlock(getWorldBlockId(px - 1, py, pz)))
+                buttonData = 1;
+
+            if (buttonData < 0)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+            placedBlockData = buttonData;
+        }
+        else if (placedBlockId == 29 || placedBlockId == 33) // sticky/normal piston
+        {
+            placedBlockData = GetPistonFacingForPlacement(px, py, pz, m_x, m_y, m_z, m_yRot);
+        }
         else if (placedBlockId == 54 || placedBlockId == 146 || placedBlockId == 61 || placedBlockId == 62)
         {
             placedBlockData = GetFacingFromPlayerYaw(m_yRot);
+        }
+        else if (placedBlockId == 93 || placedBlockId == 149) // repeater/comparator
+        {
+            placedBlockData = GetDiodeDirectionFromPlayerYaw(m_yRot);
+        }
+        else if (placedBlockId == 50 || placedBlockId == 75 || placedBlockId == 76) // torches
+        {
+            int torchData = -1;
+            if (use.face == 1 && isTopSolidBlocking(px, py - 1, pz))
+                torchData = 5;
+            else if (use.face == 2 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz + 1)))
+                torchData = 4;
+            else if (use.face == 3 && IsTopSolidSupportBlock(getWorldBlockId(px, py, pz - 1)))
+                torchData = 3;
+            else if (use.face == 4 && IsTopSolidSupportBlock(getWorldBlockId(px + 1, py, pz)))
+                torchData = 2;
+            else if (use.face == 5 && IsTopSolidSupportBlock(getWorldBlockId(px - 1, py, pz)))
+                torchData = 1;
+
+            if (torchData < 0)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
+
+            placedBlockData = torchData;
+            if (placedBlockId == 76)
+            {
+                int supportX = 0;
+                int supportY = 0;
+                int supportZ = 0;
+                if (TryGetMinimalTorchSupportPosition(torchData, px, py, pz, supportX, supportY, supportZ) &&
+                    IsMinimalBlockPoweredAt(m_world, supportX, supportY, supportZ, px, py, pz))
+                {
+                    placedBlockId = 75;
+                }
+            }
+        }
+
+        if ((placedBlockId == 55 || placedBlockId == 93 || placedBlockId == 149) &&
+            !isTopSolidBlocking(px, py - 1, pz))
+        {
+            resyncPlacementPrediction();
+            return;
+        }
+
+        if (placedBlockId == 55)
+        {
+            const int existing = getWorldBlockId(px, py, pz);
+            const bool replacingThinSnow =
+                (px == use.x && py == use.y && pz == use.z && clickedBlockIdForPlacement == 78);
+            if (existing != 0 && !replacingThinSnow)
+            {
+                resyncPlacementPrediction();
+                return;
+            }
         }
 
         // Don't overwrite a non-replaceable solid block
@@ -1851,6 +3646,42 @@ namespace LCEServer
 
         if (onBlockUpdate)
             onBlockUpdate(this, px, py, pz, placedBlockId, placedBlockData, oldBlockId, oldBlockData);
+
+        RefreshMinimalRedstoneAround(
+            m_world,
+            px, py, pz,
+            [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+            {
+                if (onBlockUpdate)
+                    onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+            },
+            [this](int dustX, int dustY, int dustZ, int previousData, int newData)
+            {
+                if (onBlockUpdate)
+                    onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
+            },
+            [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+            {
+                m_pendingDiodeTransitions.erase(
+                    std::remove_if(
+                        m_pendingDiodeTransitions.begin(),
+                        m_pendingDiodeTransitions.end(),
+                        [&](const PendingDiodeTransition& pending)
+                        {
+                            return pending.x == dx && pending.y == dy && pending.z == dz;
+                        }),
+                    m_pendingDiodeTransitions.end());
+
+                PendingDiodeTransition pending;
+                pending.x = dx;
+                pending.y = dy;
+                pending.z = dz;
+                pending.expectedBlockId = expectedBlockId;
+                pending.targetBlockId = targetBlockId;
+                pending.blockData = blockData;
+                pending.ticksRemaining = delayTicks;
+                m_pendingDiodeTransitions.push_back(pending);
+            });
     }
 
     // ---------------------------------------------------------------
