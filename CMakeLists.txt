@@ -23,6 +23,8 @@ add_executable(LCEServer
     src/core/PacketHandler.cpp
     src/core/LegacyCrafting.cpp
     src/core/TileSupport.cpp
+    src/core/RedstoneLogic.cpp
+    src/core/BlockPlacement.cpp
     src/console/Console.cpp
     src/console/LegacyItemIds.cpp
     src/world/Nbt.cpp
