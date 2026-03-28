@@ -59,50 +59,6 @@ namespace LCEServer
             }
         }
 
-        bool TryResolvePlacedBlock(int itemId, int itemDamage, int& outBlockId, int& outBlockData)
-        {
-            if (itemId >= 0 && itemId < 256)
-            {
-                outBlockId = itemId;
-                outBlockData = itemDamage & 0xF;
-                return true;
-            }
-
-            switch (itemId)
-            {
-            case 331: // redstone dust
-                outBlockId = 55;
-                outBlockData = 0;
-                return true;
-            case 354: // cake
-                outBlockId = 92;
-                outBlockData = 0;
-                return true;
-            case 356: // repeater
-                outBlockId = 93;
-                outBlockData = 0;
-                return true;
-            case 379: // brewing stand
-                outBlockId = 117;
-                outBlockData = 0;
-                return true;
-            case 380: // cauldron
-                outBlockId = 118;
-                outBlockData = 0;
-                return true;
-            case 390: // flower pot
-                outBlockId = 140;
-                outBlockData = 0;
-                return true;
-            case 404: // comparator
-                outBlockId = 149;
-                outBlockData = 0;
-                return true;
-            default:
-                return false;
-            }
-        }
-
         int CountInventoryResource(
             const std::array<ItemInstanceData, 36>& inventory,
             int itemId,
@@ -209,9 +165,11 @@ namespace LCEServer
         using BlockPlacement::IsReplaceableBlock;
         using BlockPlacement::ResolveTilePlanterPlacementTarget;
         using BlockPlacement::ResolveRedstoneDustPlacementTarget;
+        using BlockPlacement::TryResolvePlacedBlock;
         using BlockPlacement::TryResolvePlacementData;
         using BlockPlacement::TryBuildBedPlacementPlan;
         using BlockPlacement::CanPlaceBed;
+        using BlockPlacement::CanPlaceResolvedBlock;
         using BlockPlacement::TryPlanDoorPlacement;
 
         void OffsetByFace(int face, int& x, int& y, int& z)
@@ -2438,19 +2396,15 @@ namespace LCEServer
             return;
         }
 
-        int placedBlockId = 0;
-        int placedBlockData = 0;
-        if (!TryResolvePlacedBlock(use.itemId, use.itemDamage, placedBlockId, placedBlockData))
+        BlockPlacement::ResolvedBlockPlacement resolvedPlacement;
+        if (!TryResolvePlacedBlock(use.itemId, use.itemDamage, resolvedPlacement))
         {
             resyncPlacementPrediction();
             return;
         }
 
-        if (py < 0 || py >= LEGACY_WORLD_HEIGHT)
-        {
-            resyncPlacementPrediction();
-            return;
-        }
+        int placedBlockId = resolvedPlacement.blockId;
+        int placedBlockData = resolvedPlacement.blockData;
 
         if (!TryResolvePlacementData(
                 m_world,
@@ -2485,23 +2439,21 @@ namespace LCEServer
             }
         }
 
-        if ((placedBlockId == 55 || placedBlockId == 93 || placedBlockId == 149) &&
-            !isTopSolidBlocking(px, py - 1, pz))
+        resolvedPlacement.blockId = placedBlockId;
+        resolvedPlacement.blockData = placedBlockData;
+        if (!CanPlaceResolvedBlock(
+                m_world,
+                resolvedPlacement,
+                px,
+                py,
+                pz,
+                use.x,
+                use.y,
+                use.z,
+                clickedBlockIdForPlacement))
         {
             resyncPlacementPrediction();
             return;
-        }
-
-        if (placedBlockId == 55)
-        {
-            const int existing = getWorldBlockId(px, py, pz);
-            const bool replacingThinSnow =
-                (px == use.x && py == use.y && pz == use.z && clickedBlockIdForPlacement == 78);
-            if (existing != 0 && !replacingThinSnow)
-            {
-                resyncPlacementPrediction();
-                return;
-            }
         }
 
         // Don't overwrite a non-replaceable solid block

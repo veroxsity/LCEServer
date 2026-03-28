@@ -59,6 +59,82 @@ namespace LCEServer::BlockPlacement
         return GetWorldBlockId(world, x, y, z) == 0 || IsReplaceableBlock(GetWorldBlockId(world, x, y, z));
     }
 
+    bool TryResolvePlacedBlock(int itemId, int itemDamage, ResolvedBlockPlacement& outPlacement)
+    {
+        if (itemId >= 0 && itemId < 256)
+        {
+            outPlacement.blockId = itemId;
+            outPlacement.blockData = itemDamage & 0xF;
+            return true;
+        }
+
+        switch (itemId)
+        {
+        case 331:
+            outPlacement.blockId = 55;
+            outPlacement.blockData = 0;
+            return true;
+        case 354:
+            outPlacement.blockId = 92;
+            outPlacement.blockData = 0;
+            return true;
+        case 356:
+            outPlacement.blockId = 93;
+            outPlacement.blockData = 0;
+            return true;
+        case 379:
+            outPlacement.blockId = 117;
+            outPlacement.blockData = 0;
+            return true;
+        case 380:
+            outPlacement.blockId = 118;
+            outPlacement.blockData = 0;
+            return true;
+        case 390:
+            outPlacement.blockId = 140;
+            outPlacement.blockData = 0;
+            return true;
+        case 404:
+            outPlacement.blockId = 149;
+            outPlacement.blockData = 0;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool CanPlaceResolvedBlock(
+        World* world,
+        const ResolvedBlockPlacement& placement,
+        int placeX,
+        int placeY,
+        int placeZ,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int clickedBlockId)
+    {
+        if (placeY < 0 || placeY >= LEGACY_WORLD_HEIGHT)
+            return false;
+
+        if ((placement.blockId == 55 || placement.blockId == 93 || placement.blockId == 149) &&
+            !TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, placeX, placeY - 1, placeZ)))
+        {
+            return false;
+        }
+
+        if (placement.blockId == 55)
+        {
+            const int existing = GetWorldBlockId(world, placeX, placeY, placeZ);
+            const bool replacingThinSnow =
+                (placeX == clickedX && placeY == clickedY && placeZ == clickedZ && clickedBlockId == 78);
+            if (existing != 0 && !replacingThinSnow)
+                return false;
+        }
+
+        return true;
+    }
+
     bool ResolveTilePlanterPlacementTarget(
         int clickedBlockId,
         int clickedBlockData,

@@ -29,8 +29,25 @@ namespace LCEServer::BlockPlacement
         int upperData = 0;
     };
 
+    struct ResolvedBlockPlacement
+    {
+        int blockId = 0;
+        int blockData = 0;
+    };
+
     bool IsReplaceableBlock(int blockId);
     bool CanReplaceAt(World* world, int x, int y, int z);
+    bool TryResolvePlacedBlock(int itemId, int itemDamage, ResolvedBlockPlacement& outPlacement);
+    bool CanPlaceResolvedBlock(
+        World* world,
+        const ResolvedBlockPlacement& placement,
+        int placeX,
+        int placeY,
+        int placeZ,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int clickedBlockId);
 
     bool ResolveTilePlanterPlacementTarget(
         int clickedBlockId,
