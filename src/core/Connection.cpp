@@ -2,6 +2,7 @@
 // Handshake logic mirrors PendingConnection.cpp from the LCE source
 #include "Connection.h"
 #include "LegacyCrafting.h"
+#include "TileSupport.h"
 #include "TcpLayer.h"
 #include "ServerConfig.h"
 #include "../world/World.h"
@@ -314,64 +315,7 @@ namespace LCEServer
             return true;
         }
 
-        bool IsTopSolidSupportBlock(int blockId)
-        {
-            switch (blockId)
-            {
-            case 0:
-            case 6:   // sapling
-            case 27:  // powered rail
-            case 28:  // detector rail
-            case 31:  // tall grass
-            case 32:  // dead shrub
-            case 37:  // dandelion
-            case 38:  // poppy
-            case 39:  // brown mushroom
-            case 40:  // red mushroom
-            case 50:  // torch
-            case 51:  // fire
-            case 55:  // redstone dust
-            case 59:  // wheat
-            case 63:  // standing sign
-            case 64:  // wooden door
-            case 65:  // ladder
-            case 66:  // rail
-            case 68:  // wall sign
-            case 69:  // lever
-            case 70:  // stone pressure plate
-            case 71:  // iron door
-            case 72:  // wooden pressure plate
-            case 75:  // redstone torch off
-            case 76:  // redstone torch on
-            case 77:  // stone button
-            case 78:  // snow layer
-            case 83:  // sugar cane
-            case 92:  // cake
-            case 93:  // repeater off
-            case 94:  // repeater on
-            case 96:  // trapdoor
-            case 104: // pumpkin stem
-            case 105: // melon stem
-            case 106: // vine
-            case 111: // lily pad
-            case 115: // nether wart
-            case 117: // brewing stand
-            case 118: // cauldron
-            case 127: // cocoa
-            case 131: // tripwire hook
-            case 132: // tripwire
-            case 140: // flower pot
-            case 143: // wooden button
-            case 149: // comparator off
-            case 150: // comparator on
-            case 157: // activator rail
-            case 171: // carpet
-            case 175: // double plant
-                return false;
-            default:
-                return true;
-            }
-        }
+        using TileSupport::IsTopSolidSupportBlock;
 
         bool IsInstantBreakBlock(int blockId)
         {
@@ -434,37 +378,8 @@ namespace LCEServer
             }
         }
 
-        bool IsPressurePlateBlock(int blockId)
-        {
-            return blockId == 70 || blockId == 72;
-        }
-
-        bool TryGetWorldBlock(World* world, int x, int y, int z, int& outBlockId, int& outBlockData)
-        {
-            outBlockId = 0;
-            outBlockData = 0;
-            if (!world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                return false;
-
-            ChunkData* chunk = world->GetChunk(x >> 4, z >> 4);
-            if (!chunk || chunk->blocks.empty())
-                return false;
-
-            int lx = ((x % 16) + 16) % 16;
-            int lz = ((z % 16) + 16) % 16;
-            int idx = ChunkBlockIndex(lx, lz, y);
-            if (idx < 0 || idx >= static_cast<int>(chunk->blocks.size()))
-                return false;
-
-            outBlockId = chunk->blocks[idx];
-            if (!chunk->data.empty())
-            {
-                int nibbleIndex = idx >> 1;
-                uint8_t packed = chunk->data[nibbleIndex];
-                outBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-            }
-            return true;
-        }
+        using TileSupport::IsPressurePlateBlock;
+        using TileSupport::TryGetWorldBlock;
 
         bool IsMinimalRedstoneSourceBlock(int blockId, int blockData)
         {
@@ -491,7 +406,17 @@ namespace LCEServer
             int sourceZ,
             int& outX,
             int& outY,
-            int& outZ);
+            int& outZ)
+        {
+            return TileSupport::TryGetTorchSupportPosition(
+                blockData,
+                sourceX,
+                sourceY,
+                sourceZ,
+                outX,
+                outY,
+                outZ);
+        }
 
         int GetMinimalSourcePowerToPosition(
             int blockId,
@@ -547,46 +472,6 @@ namespace LCEServer
         int GetMinimalDiodeDirection(int blockData)
         {
             return blockData & 0x3;
-        }
-
-        bool TryGetMinimalTorchSupportPosition(
-            int blockData,
-            int sourceX,
-            int sourceY,
-            int sourceZ,
-            int& outX,
-            int& outY,
-            int& outZ);
-
-        bool TryGetMinimalTorchSupportPosition(
-            int blockData,
-            int sourceX,
-            int sourceY,
-            int sourceZ,
-            int& outX,
-            int& outY,
-            int& outZ)
-        {
-            switch (blockData & 0x7)
-            {
-            case 1:
-                outX = sourceX - 1; outY = sourceY; outZ = sourceZ;
-                return true;
-            case 2:
-                outX = sourceX + 1; outY = sourceY; outZ = sourceZ;
-                return true;
-            case 3:
-                outX = sourceX; outY = sourceY; outZ = sourceZ - 1;
-                return true;
-            case 4:
-                outX = sourceX; outY = sourceY; outZ = sourceZ + 1;
-                return true;
-            case 5:
-                outX = sourceX; outY = sourceY - 1; outZ = sourceZ;
-                return true;
-            default:
-                return false;
-            }
         }
 
         bool IsMinimalBlockPoweredAt(
@@ -1270,6 +1155,84 @@ namespace LCEServer
 
             if (anyImmediateDiodeChange)
                 RecomputeMinimalDustPowerAround(world, originX, originY, originZ, onDustDataChanged);
+        }
+
+        using TileSupport::IsSupportSensitiveBlock;
+        using TileSupport::CanSupportSensitiveBlockStay;
+
+        void CleanupUnsupportedSupportSensitiveBlocksAround(
+            World* world,
+            int originX,
+            int originY,
+            int originZ,
+            const std::function<void(int, int, int, int, int, int, int)>& onBlockChanged,
+            const std::function<void(int, int, int, int, int)>& onDustDataChanged,
+            const std::function<void(int, int, int, int, int, int, int)>& onScheduleDiodeChange)
+        {
+            if (!world)
+                return;
+
+            auto posKey = [](int x, int y, int z) -> int64_t
+            {
+                return (static_cast<int64_t>(x) << 40) ^
+                       (static_cast<int64_t>(y & 0xFF) << 32) ^
+                       static_cast<uint32_t>(z);
+            };
+
+            std::queue<RedstonePos> queue;
+            std::unordered_set<int64_t> queued;
+
+            auto enqueueNearby = [&](int x, int y, int z)
+            {
+                static const int dx[] = { 0, -1, 1, 0, 0, 0, 0 };
+                static const int dy[] = { 0, 0, 0, -1, 1, 0, 0 };
+                static const int dz[] = { 0, 0, 0, 0, 0, -1, 1 };
+                for (int i = 0; i < 7; ++i)
+                {
+                    const int nx = x + dx[i];
+                    const int ny = y + dy[i];
+                    const int nz = z + dz[i];
+                    if (ny < 0 || ny >= LEGACY_WORLD_HEIGHT)
+                        continue;
+
+                    const int64_t key = posKey(nx, ny, nz);
+                    if (!queued.insert(key).second)
+                        continue;
+                    queue.push({ nx, ny, nz });
+                }
+            };
+
+            enqueueNearby(originX, originY, originZ);
+
+            while (!queue.empty())
+            {
+                const RedstonePos current = queue.front();
+                queue.pop();
+
+                int blockId = 0;
+                int blockData = 0;
+                if (!TryGetWorldBlock(world, current.x, current.y, current.z, blockId, blockData) ||
+                    !IsSupportSensitiveBlock(blockId))
+                {
+                    continue;
+                }
+
+                if (CanSupportSensitiveBlockStay(world, current.x, current.y, current.z, blockId, blockData))
+                    continue;
+
+                if (!world->SetBlock(current.x, current.y, current.z, 0, 0))
+                    continue;
+
+                onBlockChanged(current.x, current.y, current.z, 0, 0, blockId, blockData);
+                RefreshMinimalRedstoneAround(
+                    world,
+                    current.x, current.y, current.z,
+                    onBlockChanged,
+                    onDustDataChanged,
+                    onScheduleDiodeChange);
+
+                enqueueNearby(current.x, current.y, current.z);
+            }
         }
 
         int GetPistonFacingForPlacement(int x, int y, int z, double playerX, double playerY, double playerZ, float yRot)
@@ -2579,6 +2542,42 @@ namespace LCEServer
             if (onBlockUpdate)
                 onBlockUpdate(this, x, y, z, 0, 0, oldBlockId, oldBlockData);
 
+            CleanupUnsupportedSupportSensitiveBlocksAround(
+                m_world,
+                x, y, z,
+                [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+                },
+                [this](int dustX, int dustY, int dustZ, int previousData, int newData)
+                {
+                    if (onBlockUpdate)
+                        onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
+                },
+                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+                {
+                    m_pendingDiodeTransitions.erase(
+                        std::remove_if(
+                            m_pendingDiodeTransitions.begin(),
+                            m_pendingDiodeTransitions.end(),
+                            [&](const PendingDiodeTransition& pending)
+                            {
+                                return pending.x == dx && pending.y == dy && pending.z == dz;
+                            }),
+                        m_pendingDiodeTransitions.end());
+
+                    PendingDiodeTransition pending;
+                    pending.x = dx;
+                    pending.y = dy;
+                    pending.z = dz;
+                    pending.expectedBlockId = expectedBlockId;
+                    pending.targetBlockId = targetBlockId;
+                    pending.blockData = blockData;
+                    pending.ticksRemaining = delayTicks;
+                    m_pendingDiodeTransitions.push_back(pending);
+                });
+
             RefreshMinimalRedstoneAround(
                 m_world,
                 x, y, z,
@@ -2657,7 +2656,9 @@ namespace LCEServer
             return true;
         };
 
-        if (act.y + 1 >= 0 && act.y + 1 < LEGACY_WORLD_HEIGHT)
+        const bool allowDirectAboveRetarget = (act.face == 1 || act.face == 255);
+        if (allowDirectAboveRetarget &&
+            act.y + 1 >= 0 && act.y + 1 < LEGACY_WORLD_HEIGHT)
         {
             if (!tryRetargetCandidate(act.x, act.y + 1, act.z) &&
                 act.face >= 0 && act.face <= 5)
