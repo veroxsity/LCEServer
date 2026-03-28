@@ -166,6 +166,8 @@ namespace LCEServer
         using BlockPlacement::IsReplaceableBlock;
         using BlockPlacement::ResolveTilePlanterPlacementTarget;
         using BlockPlacement::ResolveRedstoneDustPlacementTarget;
+        using BlockPlacement::TryResolvePredictedPlacementTarget;
+        using BlockPlacement::TryResolvePlacementTarget;
         using BlockPlacement::TryResolvePlacedBlock;
         using BlockPlacement::TryResolvePlacementData;
         using BlockPlacement::TryBuildBedPlacementPlan;
@@ -268,6 +270,10 @@ namespace LCEServer
         using BlockInteraction::GetToggledLeverData;
         using BlockInteraction::TryResolveComparatorToggle;
         using BlockInteraction::TryResolveButtonPress;
+        using BlockInteraction::TryResolvePressurePlateState;
+        using BlockInteraction::ShouldApplyDiodeTransition;
+        using BlockInteraction::TryResolveButtonRelease;
+        using BlockInteraction::GetPressurePlateTickAction;
     }
 
     int64_t Connection::MakeChunkKey(int cx, int cz)
@@ -457,25 +463,28 @@ namespace LCEServer
             if (!m_world)
                 return false;
 
+            BlockInteraction::InteractionResult interaction;
             int blockId = 0;
             int blockData = 0;
             if (!getWorldBlock(x, y, z, blockId, blockData) || !IsPressurePlateBlock(blockId))
                 return false;
 
             const bool occupied = isPressurePlateOccupied ? isPressurePlateOccupied(x, y, z, blockId == 72) : false;
-            const int targetData = occupied ? 1 : 0;
-            if (blockData == targetData)
+            if (!TryResolvePressurePlateState(m_world, x, y, z, occupied, interaction))
+                return false;
+
+            if (blockData == interaction.blockData)
             {
                 if (occupied)
                     ensurePressurePlateCheck(x, y, z, blockId);
                 return occupied;
             }
 
-            if (!m_world->SetBlock(x, y, z, blockId, targetData))
+            if (!m_world->SetBlock(x, y, z, interaction.blockId, interaction.blockData))
                 return occupied;
 
             if (onBlockUpdate)
-                onBlockUpdate(this, x, y, z, blockId, targetData, blockId, blockData);
+                onBlockUpdate(this, x, y, z, interaction.blockId, interaction.blockData, blockId, blockData);
 
             scheduleAwareRedstoneRefresh(x, y, z);
             if (occupied)
@@ -498,14 +507,13 @@ namespace LCEServer
                     continue;
                 }
 
-                int currentBlockId = 0;
-                int currentBlockData = 0;
-                const bool sameExpectedBlock =
-                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
-                    currentBlockId == pending.expectedBlockId &&
-                    currentBlockData == pending.blockData;
-
-                if (sameExpectedBlock &&
+                if (ShouldApplyDiodeTransition(
+                        m_world,
+                        pending.x,
+                        pending.y,
+                        pending.z,
+                        pending.expectedBlockId,
+                        pending.blockData) &&
                     m_world->SetBlock(pending.x, pending.y, pending.z, pending.targetBlockId, pending.blockData))
                 {
                     if (onBlockUpdate)
@@ -530,20 +538,21 @@ namespace LCEServer
                     continue;
                 }
 
-                int currentBlockId = 0;
-                int currentBlockData = 0;
-                const bool samePressedButton =
-                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
-                    currentBlockId == pending.blockId &&
-                    (currentBlockData & 0x8) != 0;
-
-                if (samePressedButton &&
-                    m_world->SetBlock(pending.x, pending.y, pending.z, pending.blockId, pending.baseData) &&
+                BlockInteraction::InteractionResult interaction;
+                if (TryResolveButtonRelease(
+                        m_world,
+                        pending.x,
+                        pending.y,
+                        pending.z,
+                        pending.blockId,
+                        pending.baseData,
+                        interaction) &&
+                    m_world->SetBlock(pending.x, pending.y, pending.z, interaction.blockId, interaction.blockData) &&
                     onBlockUpdate)
                 {
                     onBlockUpdate(this, pending.x, pending.y, pending.z,
-                        pending.blockId, pending.baseData,
-                        pending.blockId, currentBlockData);
+                        interaction.blockId, interaction.blockData,
+                        pending.blockId, pending.baseData | 0x8);
                     scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
                 }
 
@@ -559,33 +568,33 @@ namespace LCEServer
                     continue;
                 }
 
-                int currentBlockId = 0;
-                int currentBlockData = 0;
-                const bool samePressedPlate =
-                    getWorldBlock(pending.x, pending.y, pending.z, currentBlockId, currentBlockData) &&
-                    currentBlockId == pending.blockId &&
-                    IsPressurePlateBlock(currentBlockId) &&
-                    (currentBlockData & 0x1) != 0;
+                const bool occupied =
+                    isPressurePlateOccupied ? isPressurePlateOccupied(
+                        pending.x, pending.y, pending.z, pending.blockId == 72) : false;
+                const auto action = GetPressurePlateTickAction(
+                    m_world,
+                    pending.x,
+                    pending.y,
+                    pending.z,
+                    pending.blockId,
+                    occupied);
 
-                if (samePressedPlate)
+                if (action == BlockInteraction::PressurePlateTickAction::KeepPressed)
                 {
-                    const bool occupied =
-                        isPressurePlateOccupied ? isPressurePlateOccupied(
-                            pending.x, pending.y, pending.z, currentBlockId == 72) : false;
-                    if (occupied)
-                    {
-                        pending.ticksRemaining = 20;
-                        ++i;
-                        continue;
-                    }
+                    pending.ticksRemaining = 20;
+                    ++i;
+                    continue;
+                }
 
-                    if (m_world->SetBlock(pending.x, pending.y, pending.z, currentBlockId, 0))
+                if (action == BlockInteraction::PressurePlateTickAction::Release)
+                {
+                    if (m_world->SetBlock(pending.x, pending.y, pending.z, pending.blockId, 0))
                     {
                         if (onBlockUpdate)
                         {
                             onBlockUpdate(this, pending.x, pending.y, pending.z,
-                                currentBlockId, 0,
-                                currentBlockId, currentBlockData);
+                                pending.blockId, 0,
+                                pending.blockId, 1);
                         }
                         scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
                     }
@@ -1825,44 +1834,7 @@ namespace LCEServer
                 int px = use.x;
                 int py = use.y;
                 int pz = use.z;
-                bool hasPredictedTarget = false;
-
-                if (use.face == -1)
-                {
-                    hasPredictedTarget = true;
-                }
-                else
-                {
-                    static const int dx[] = { 0,  0,  0,  0, -1, 1 };
-                    static const int dy[] = {-1,  1,  0,  0,  0, 0 };
-                    static const int dz[] = { 0,  0, -1,  1,  0, 0 };
-
-                    const int face = use.face & 0xFF;
-                    if (face <= 5)
-                    {
-                        ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
-                        bool clickedReplaceable = false;
-                        if (clickedChunk && !clickedChunk->blocks.empty() &&
-                            use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
-                        {
-                            int lx = ((use.x % 16) + 16) % 16;
-                            int lz = ((use.z % 16) + 16) % 16;
-                            int idx = ChunkBlockIndex(lx, lz, use.y);
-                            if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
-                                clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
-                        }
-
-                        if (!clickedReplaceable)
-                        {
-                            px = use.x + dx[face];
-                            py = use.y + dy[face];
-                            pz = use.z + dz[face];
-                        }
-                        hasPredictedTarget = true;
-                    }
-                }
-
-                if (hasPredictedTarget &&
+                if (TryResolvePredictedPlacementTarget(m_world, use.x, use.y, use.z, use.face, px, py, pz) &&
                     (px != use.x || py != use.y || pz != use.z))
                 {
                     sendActualTileState(px, py, pz);
@@ -2174,51 +2146,9 @@ namespace LCEServer
             }
         };
 
-        int px, py, pz;
-
-        if (use.face == -1)
-        {
-            // face = -1: explicit replace-in-place signal
-            px = use.x; py = use.y; pz = use.z;
-        }
-        else
-        {
-            static const int dx[] = { 0,  0,  0,  0, -1, 1 };
-            static const int dy[] = {-1,  1,  0,  0,  0, 0 };
-            static const int dz[] = { 0,  0, -1,  1,  0, 0 };
-
-            int face = use.face & 0xFF;
-            if (face > 5)
-            {
-                resyncPlacementPrediction();
-                return;
-            }
-
-            // Check if the clicked block itself is replaceable.
-            // If so, place INTO it rather than adjacent to it —
-            // the client already did this visually (snow→cobblestone).
-            ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
-            bool clickedReplaceable = false;
-            if (clickedChunk && !clickedChunk->blocks.empty())
-            {
-                int lx = ((use.x % 16) + 16) % 16;
-                int lz = ((use.z % 16) + 16) % 16;
-                int idx = ChunkBlockIndex(lx, lz, use.y);
-                if (idx >= 0 && idx < (int)clickedChunk->blocks.size())
-                    clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
-            }
-
-            if (clickedReplaceable)
-            {
-                px = use.x; py = use.y; pz = use.z;
-            }
-            else
-            {
-                px = use.x + dx[face];
-                py = use.y + dy[face];
-                pz = use.z + dz[face];
-            }
-        }
+        int px = use.x;
+        int py = use.y;
+        int pz = use.z;
 
         auto getWorldBlockId = [&](int x, int y, int z) -> int
         {
@@ -2292,42 +2222,21 @@ namespace LCEServer
         py = use.y;
         pz = use.z;
 
-        if (use.face != -1)
+        if (!TryResolvePlacementTarget(
+                m_world,
+                use.itemId,
+                clickedBlockIdForPlacement,
+                clickedBlockDataForPlacement,
+                use.x,
+                use.y,
+                use.z,
+                use.face,
+                px,
+                py,
+                pz))
         {
-            const int face = use.face & 0xFF;
-            bool resolvedTarget = false;
-
-            if (use.itemId == 331)
-            {
-                resolvedTarget = ResolveRedstoneDustPlacementTarget(
-                    clickedBlockIdForPlacement,
-                    use.x,
-                    use.y,
-                    use.z,
-                    face,
-                    px,
-                    py,
-                    pz);
-            }
-            else
-            {
-                resolvedTarget = ResolveTilePlanterPlacementTarget(
-                    clickedBlockIdForPlacement,
-                    clickedBlockDataForPlacement,
-                    use.x,
-                    use.y,
-                    use.z,
-                    face,
-                    px,
-                    py,
-                    pz);
-            }
-
-            if (!resolvedTarget)
-            {
-                resyncPlacementPrediction();
-                return;
-            }
+            resyncPlacementPrediction();
+            return;
         }
 
         if (use.itemId == 355) // bed

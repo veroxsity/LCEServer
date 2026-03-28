@@ -1,8 +1,17 @@
 #include "BlockInteraction.h"
 #include "RedstoneLogic.h"
+#include "TileSupport.h"
 
 namespace LCEServer::BlockInteraction
 {
+    namespace
+    {
+        bool TryGetWorldBlock(World* world, int x, int y, int z, int& outBlockId, int& outBlockData)
+        {
+            return TileSupport::TryGetWorldBlock(world, x, y, z, outBlockId, outBlockData);
+        }
+    }
+
     int GetToggledRepeaterDelayData(int blockData)
     {
         return (((blockData & 0xC) + 0x4) & 0xC) | (blockData & 0x3);
@@ -46,5 +55,84 @@ namespace LCEServer::BlockInteraction
         outResult.blockData = blockData | 0x8;
         outReleaseTicks = (blockId == 143) ? 30 : 20;
         return true;
+    }
+
+    bool TryResolvePressurePlateState(
+        World* world,
+        int x,
+        int y,
+        int z,
+        bool occupied,
+        InteractionResult& outResult)
+    {
+        int blockId = 0;
+        int blockData = 0;
+        if (!TryGetWorldBlock(world, x, y, z, blockId, blockData) || !TileSupport::IsPressurePlateBlock(blockId))
+            return false;
+
+        outResult.blockId = blockId;
+        outResult.blockData = occupied ? 1 : 0;
+        return true;
+    }
+
+    bool ShouldApplyDiodeTransition(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int expectedBlockId,
+        int expectedBlockData)
+    {
+        int currentBlockId = 0;
+        int currentBlockData = 0;
+        return TryGetWorldBlock(world, x, y, z, currentBlockId, currentBlockData) &&
+               currentBlockId == expectedBlockId &&
+               currentBlockData == expectedBlockData;
+    }
+
+    bool TryResolveButtonRelease(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int blockId,
+        int baseData,
+        InteractionResult& outResult)
+    {
+        int currentBlockId = 0;
+        int currentBlockData = 0;
+        if (!TryGetWorldBlock(world, x, y, z, currentBlockId, currentBlockData) ||
+            currentBlockId != blockId ||
+            (currentBlockData & 0x8) == 0)
+        {
+            return false;
+        }
+
+        outResult.blockId = blockId;
+        outResult.blockData = baseData;
+        return true;
+    }
+
+    PressurePlateTickAction GetPressurePlateTickAction(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int expectedBlockId,
+        bool occupied)
+    {
+        int currentBlockId = 0;
+        int currentBlockData = 0;
+        const bool samePressedPlate =
+            TryGetWorldBlock(world, x, y, z, currentBlockId, currentBlockData) &&
+            currentBlockId == expectedBlockId &&
+            TileSupport::IsPressurePlateBlock(currentBlockId) &&
+            (currentBlockData & 0x1) != 0;
+
+        if (!samePressedPlate)
+            return PressurePlateTickAction::NoChange;
+        if (occupied)
+            return PressurePlateTickAction::KeepPressed;
+        return PressurePlateTickAction::Release;
     }
 }

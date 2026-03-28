@@ -70,6 +70,29 @@ namespace LCEServer::BlockPlacement
         int& outY,
         int& outZ);
 
+    bool TryResolvePredictedPlacementTarget(
+        World* world,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ);
+
+    bool TryResolvePlacementTarget(
+        World* world,
+        int itemId,
+        int clickedBlockId,
+        int clickedBlockData,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ);
+
     int GetFacingFromPlayerYaw(float yRot);
     int GetHorizontalDirectionFromPlayerYaw(float yRot);
     int GetDoorDirectionFromPlayerYaw(float yRot);

@@ -187,6 +187,82 @@ namespace LCEServer::BlockPlacement
         return true;
     }
 
+    bool TryResolvePredictedPlacementTarget(
+        World* world,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ)
+    {
+        outX = clickedX;
+        outY = clickedY;
+        outZ = clickedZ;
+
+        if (face == -1)
+            return true;
+
+        const int normalizedFace = face & 0xFF;
+        if (normalizedFace > 5)
+            return false;
+
+        const bool clickedReplaceable = IsReplaceableBlock(GetWorldBlockId(world, clickedX, clickedY, clickedZ));
+        if (!clickedReplaceable)
+            OffsetByFace(normalizedFace, outX, outY, outZ);
+
+        return true;
+    }
+
+    bool TryResolvePlacementTarget(
+        World* world,
+        int itemId,
+        int clickedBlockId,
+        int clickedBlockData,
+        int clickedX,
+        int clickedY,
+        int clickedZ,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ)
+    {
+        (void)world;
+
+        outX = clickedX;
+        outY = clickedY;
+        outZ = clickedZ;
+
+        if (face == -1)
+            return true;
+
+        const int normalizedFace = face & 0xFF;
+        if (itemId == 331)
+        {
+            return ResolveRedstoneDustPlacementTarget(
+                clickedBlockId,
+                clickedX,
+                clickedY,
+                clickedZ,
+                normalizedFace,
+                outX,
+                outY,
+                outZ);
+        }
+
+        return ResolveTilePlanterPlacementTarget(
+            clickedBlockId,
+            clickedBlockData,
+            clickedX,
+            clickedY,
+            clickedZ,
+            normalizedFace,
+            outX,
+            outY,
+            outZ);
+    }
+
     int GetFacingFromPlayerYaw(float yRot)
     {
         int dir = (static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 3;
