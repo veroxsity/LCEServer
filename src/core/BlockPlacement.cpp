@@ -21,6 +21,42 @@ namespace LCEServer::BlockPlacement
             default: break;
             }
         }
+
+        int GetWorldBlockId(World* world, int x, int y, int z)
+        {
+            int blockId = 0;
+            int blockData = 0;
+            if (!TileSupport::TryGetWorldBlock(world, x, y, z, blockId, blockData))
+                return 0;
+            return blockId;
+        }
+    }
+
+    bool IsReplaceableBlock(int blockId)
+    {
+        switch (blockId)
+        {
+        case 0:
+        case 31:
+        case 32:
+        case 37:
+        case 38:
+        case 39:
+        case 40:
+        case 59:
+        case 78:
+        case 83:
+        case 106:
+        case 175:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool CanReplaceAt(World* world, int x, int y, int z)
+    {
+        return GetWorldBlockId(world, x, y, z) == 0 || IsReplaceableBlock(GetWorldBlockId(world, x, y, z));
     }
 
     bool ResolveTilePlanterPlacementTarget(
@@ -141,6 +177,162 @@ namespace LCEServer::BlockPlacement
         return (((static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 3) + 2) % 4;
     }
 
+    bool TryResolvePlacementData(
+        World* world,
+        int blockId,
+        int itemDamage,
+        int x,
+        int y,
+        int z,
+        int face,
+        double playerX,
+        double playerY,
+        double playerZ,
+        float yRot,
+        int& outBlockData)
+    {
+        outBlockData = itemDamage & 0xF;
+
+        if (blockId == 17)
+        {
+            outBlockData = GetRotatedPillarDataFromFace(itemDamage, face);
+            return true;
+        }
+
+        if (blockId == 69)
+        {
+            return TryGetLeverPlacementData(world, x, y, z, face, yRot, outBlockData);
+        }
+
+        if (blockId == 77 || blockId == 143)
+        {
+            return TryGetButtonPlacementData(world, x, y, z, face, outBlockData);
+        }
+
+        if (blockId == 29 || blockId == 33)
+        {
+            outBlockData = GetPistonFacingForPlacement(x, y, z, playerX, playerY, playerZ, yRot);
+            return true;
+        }
+
+        if (blockId == 54 || blockId == 146 || blockId == 61 || blockId == 62)
+        {
+            outBlockData = GetFacingFromPlayerYaw(yRot);
+            return true;
+        }
+
+        if (blockId == 93 || blockId == 149)
+        {
+            outBlockData = GetDiodeDirectionFromPlayerYaw(yRot);
+            return true;
+        }
+
+        if (blockId == 50 || blockId == 75 || blockId == 76)
+        {
+            return TryGetTorchPlacementData(world, x, y, z, face, outBlockData);
+        }
+
+        return true;
+    }
+
+    bool TryBuildBedPlacementPlan(
+        int x,
+        int y,
+        int z,
+        int face,
+        float yRot,
+        BedPlacementPlan& outPlan)
+    {
+        if (face != 1 || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+            return false;
+
+        outPlan.footX = x;
+        outPlan.footY = y;
+        outPlan.footZ = z;
+        outPlan.footData = GetHorizontalDirectionFromPlayerYaw(yRot);
+
+        int xOffset = 0;
+        int zOffset = 0;
+        if (outPlan.footData == 0) zOffset = 1;
+        else if (outPlan.footData == 1) xOffset = -1;
+        else if (outPlan.footData == 2) zOffset = -1;
+        else xOffset = 1;
+
+        outPlan.headX = x + xOffset;
+        outPlan.headY = y;
+        outPlan.headZ = z + zOffset;
+        outPlan.headData = outPlan.footData | 0x8;
+        return outPlan.headY >= 0 && outPlan.headY < LEGACY_WORLD_HEIGHT;
+    }
+
+    bool CanPlaceBed(World* world, const BedPlacementPlan& plan)
+    {
+        return CanReplaceAt(world, plan.footX, plan.footY, plan.footZ) &&
+               CanReplaceAt(world, plan.headX, plan.headY, plan.headZ) &&
+               TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, plan.footX, plan.footY - 1, plan.footZ)) &&
+               TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, plan.headX, plan.headY - 1, plan.headZ));
+    }
+
+    bool TryPlanDoorPlacement(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int face,
+        int doorBlockId,
+        float yRot,
+        DoorPlacementPlan& outPlan)
+    {
+        if (face != 1 || y < 0 || y >= LEGACY_WORLD_HEIGHT - 1)
+            return false;
+
+        if (!TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y - 1, z)) ||
+            !CanReplaceAt(world, x, y, z) ||
+            !CanReplaceAt(world, x, y + 1, z))
+        {
+            return false;
+        }
+
+        outPlan.lowerX = x;
+        outPlan.lowerY = y;
+        outPlan.lowerZ = z;
+        outPlan.upperX = x;
+        outPlan.upperY = y + 1;
+        outPlan.upperZ = z;
+        outPlan.blockId = doorBlockId;
+        outPlan.lowerData = GetDoorDirectionFromPlayerYaw(yRot);
+
+        int xOffset = 0;
+        int zOffset = 0;
+        if (outPlan.lowerData == 0) zOffset = 1;
+        else if (outPlan.lowerData == 1) xOffset = -1;
+        else if (outPlan.lowerData == 2) zOffset = -1;
+        else xOffset = 1;
+
+        const int solidLeft =
+            (TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x - xOffset, y, z - zOffset)) ? 1 : 0) +
+            (TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x - xOffset, y + 1, z - zOffset)) ? 1 : 0);
+        const int solidRight =
+            (TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x + xOffset, y, z + zOffset)) ? 1 : 0) +
+            (TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x + xOffset, y + 1, z + zOffset)) ? 1 : 0);
+
+        const bool doorLeft =
+            (GetWorldBlockId(world, x - xOffset, y, z - zOffset) == doorBlockId) ||
+            (GetWorldBlockId(world, x - xOffset, y + 1, z - zOffset) == doorBlockId);
+        const bool doorRight =
+            (GetWorldBlockId(world, x + xOffset, y, z + zOffset) == doorBlockId) ||
+            (GetWorldBlockId(world, x + xOffset, y + 1, z + zOffset) == doorBlockId);
+
+        bool flip = false;
+        if (doorLeft && !doorRight)
+            flip = true;
+        else if (solidRight > solidLeft)
+            flip = true;
+
+        outPlan.upperData = 0x8 | (flip ? 1 : 0);
+        return true;
+    }
+
     bool TryGetLeverPlacementData(
         World* world,
         int x,
@@ -150,28 +342,19 @@ namespace LCEServer::BlockPlacement
         float yRot,
         int& outData)
     {
-        const auto getBlockId = [world](int bx, int by, int bz) -> int
-        {
-            int blockId = 0;
-            int blockData = 0;
-            if (!TileSupport::TryGetWorldBlock(world, bx, by, bz, blockId, blockData))
-                return 0;
-            return blockId;
-        };
-
         const int yawDir = (static_cast<int>(std::floor(yRot * 4.0 / 360.0 + 0.5))) & 1;
         int leverData = -1;
-        if (face == 0 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y + 1, z)))
+        if (face == 0 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y + 1, z)))
             leverData = yawDir == 0 ? 7 : 0;
-        else if (face == 1 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y - 1, z)))
+        else if (face == 1 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y - 1, z)))
             leverData = yawDir == 0 ? 5 : 6;
-        else if (face == 2 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z + 1)))
+        else if (face == 2 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z + 1)))
             leverData = 4;
-        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z - 1)))
+        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z - 1)))
             leverData = 3;
-        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(getBlockId(x + 1, y, z)))
+        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x + 1, y, z)))
             leverData = 2;
-        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(getBlockId(x - 1, y, z)))
+        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x - 1, y, z)))
             leverData = 1;
 
         if (leverData < 0)
@@ -189,23 +372,14 @@ namespace LCEServer::BlockPlacement
         int face,
         int& outData)
     {
-        const auto getBlockId = [world](int bx, int by, int bz) -> int
-        {
-            int blockId = 0;
-            int blockData = 0;
-            if (!TileSupport::TryGetWorldBlock(world, bx, by, bz, blockId, blockData))
-                return 0;
-            return blockId;
-        };
-
         int buttonData = -1;
-        if (face == 2 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z + 1)))
+        if (face == 2 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z + 1)))
             buttonData = 4;
-        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z - 1)))
+        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z - 1)))
             buttonData = 3;
-        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(getBlockId(x + 1, y, z)))
+        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x + 1, y, z)))
             buttonData = 2;
-        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(getBlockId(x - 1, y, z)))
+        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x - 1, y, z)))
             buttonData = 1;
 
         if (buttonData < 0)
@@ -223,25 +397,16 @@ namespace LCEServer::BlockPlacement
         int face,
         int& outData)
     {
-        const auto getBlockId = [world](int bx, int by, int bz) -> int
-        {
-            int blockId = 0;
-            int blockData = 0;
-            if (!TileSupport::TryGetWorldBlock(world, bx, by, bz, blockId, blockData))
-                return 0;
-            return blockId;
-        };
-
         int torchData = -1;
-        if (face == 1 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y - 1, z)))
+        if (face == 1 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y - 1, z)))
             torchData = 5;
-        else if (face == 2 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z + 1)))
+        else if (face == 2 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z + 1)))
             torchData = 4;
-        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(getBlockId(x, y, z - 1)))
+        else if (face == 3 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x, y, z - 1)))
             torchData = 3;
-        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(getBlockId(x + 1, y, z)))
+        else if (face == 4 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x + 1, y, z)))
             torchData = 2;
-        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(getBlockId(x - 1, y, z)))
+        else if (face == 5 && TileSupport::IsTopSolidSupportBlock(GetWorldBlockId(world, x - 1, y, z)))
             torchData = 1;
 
         if (torchData < 0)

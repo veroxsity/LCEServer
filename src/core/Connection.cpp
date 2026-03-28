@@ -206,11 +206,13 @@ namespace LCEServer
         }
 
         using BlockPlacement::GetFacingFromPlayerYaw;
-        using BlockPlacement::GetHorizontalDirectionFromPlayerYaw;
-        using BlockPlacement::GetDoorDirectionFromPlayerYaw;
-        using BlockPlacement::GetRotatedPillarDataFromFace;
+        using BlockPlacement::IsReplaceableBlock;
         using BlockPlacement::ResolveTilePlanterPlacementTarget;
         using BlockPlacement::ResolveRedstoneDustPlacementTarget;
+        using BlockPlacement::TryResolvePlacementData;
+        using BlockPlacement::TryBuildBedPlacementPlan;
+        using BlockPlacement::CanPlaceBed;
+        using BlockPlacement::TryPlanDoorPlacement;
 
         void OffsetByFace(int face, int& x, int& y, int& z)
         {
@@ -1812,31 +1814,6 @@ namespace LCEServer
     // The target block coords (x,y,z) are the block being clicked ON.
     // We offset by face to get the block being PLACED.
     // ---------------------------------------------------------------
-    // Returns true for blocks the client treats as replaceable
-    // (clicking them places INTO the same position, not adjacent).
-    // face == -1 (0xFF) is the wire signal for this.
-    static bool IsReplaceableBlock(int blockId)
-    {
-        switch (blockId)
-        {
-        case 0:   // air
-        case 31:  // tall grass
-        case 32:  // dead shrub
-        case 37:  // dandelion
-        case 38:  // rose/poppy
-        case 39:  // brown mushroom
-        case 40:  // red mushroom
-        case 59:  // wheat crops
-        case 78:  // snow layer
-        case 83:  // sugar cane
-        case 106: // vine
-        case 175: // double plant (sunflower etc)
-            return true;
-        default:
-            return false;
-        }
-    }
-
     void Connection::HandleUseItem(const uint8_t* data, int size)
     {
         PacketHandler::UseItemData use;
@@ -2317,8 +2294,7 @@ namespace LCEServer
 
         auto canReplaceAt = [&](int x, int y, int z) -> bool
         {
-            int blockId = getWorldBlockId(x, y, z);
-            return blockId == 0 || IsReplaceableBlock(blockId);
+            return BlockPlacement::CanReplaceAt(m_world, x, y, z);
         };
 
         auto isTopSolidBlocking = [&](int x, int y, int z) -> bool
@@ -2392,121 +2368,73 @@ namespace LCEServer
 
         if (use.itemId == 355) // bed
         {
-            if (use.face != 1 || py < 0 || py >= LEGACY_WORLD_HEIGHT)
+            BlockPlacement::BedPlacementPlan bedPlan;
+            if (!TryBuildBedPlacementPlan(px, py, pz, use.face, m_yRot, bedPlan))
             {
                 resyncPlacementPrediction();
                 return;
             }
 
-            const int dir = GetHorizontalDirectionFromPlayerYaw(m_yRot);
-            int xra = 0;
-            int zra = 0;
-            if (dir == 0) zra = 1;
-            else if (dir == 1) xra = -1;
-            else if (dir == 2) zra = -1;
-            else xra = 1;
-
-            const int hx = px + xra;
-            const int hy = py;
-            const int hz = pz + zra;
-            if (hy < 0 || hy >= LEGACY_WORLD_HEIGHT ||
-                !canReplaceAt(px, py, pz) ||
-                !canReplaceAt(hx, hy, hz) ||
-                !isTopSolidBlocking(px, py - 1, pz) ||
-                !isTopSolidBlocking(hx, hy - 1, hz))
+            if (!CanPlaceBed(m_world, bedPlan))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(hx, hy, hz);
+                sendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
                 return;
             }
 
-            const int oldFootId = getWorldBlockId(px, py, pz);
-            const int oldFootData = getWorldBlockData(px, py, pz);
-            const int oldHeadId = getWorldBlockId(hx, hy, hz);
-            const int oldHeadData = getWorldBlockData(hx, hy, hz);
+            const int oldFootId = getWorldBlockId(bedPlan.footX, bedPlan.footY, bedPlan.footZ);
+            const int oldFootData = getWorldBlockData(bedPlan.footX, bedPlan.footY, bedPlan.footZ);
+            const int oldHeadId = getWorldBlockId(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
+            const int oldHeadData = getWorldBlockData(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
 
-            if (!m_world->SetBlock(px, py, pz, 26, dir) ||
-                !m_world->SetBlock(hx, hy, hz, 26, dir | 0x8))
+            if (!m_world->SetBlock(bedPlan.footX, bedPlan.footY, bedPlan.footZ, 26, bedPlan.footData) ||
+                !m_world->SetBlock(bedPlan.headX, bedPlan.headY, bedPlan.headZ, 26, bedPlan.headData))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(hx, hy, hz);
+                sendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
                 return;
             }
 
             Logger::Info("Server", "'%ls' placed bed at (%d,%d,%d) facing=%d",
-                m_playerName.c_str(), px, py, pz, dir);
+                m_playerName.c_str(), bedPlan.footX, bedPlan.footY, bedPlan.footZ, bedPlan.footData);
 
             consumeSelectedPlacementItem();
-            notifyBlockPlaced(px, py, pz, 26, dir, oldFootId, oldFootData);
-            notifyBlockPlaced(hx, hy, hz, 26, dir | 0x8, oldHeadId, oldHeadData);
+            notifyBlockPlaced(bedPlan.footX, bedPlan.footY, bedPlan.footZ, 26, bedPlan.footData, oldFootId, oldFootData);
+            notifyBlockPlaced(bedPlan.headX, bedPlan.headY, bedPlan.headZ, 26, bedPlan.headData, oldHeadId, oldHeadData);
             return;
         }
 
         if (use.itemId == 324 || use.itemId == 330) // wooden/iron door
         {
-            if (use.face != 1 || py < 0 || py >= LEGACY_WORLD_HEIGHT - 1)
-            {
-                resyncPlacementPrediction();
-                return;
-            }
-
             const int doorBlockId = (use.itemId == 324) ? 64 : 71;
-            if (!isTopSolidBlocking(px, py - 1, pz) ||
-                !canReplaceAt(px, py, pz) ||
-                !canReplaceAt(px, py + 1, pz))
+            BlockPlacement::DoorPlacementPlan doorPlan;
+            if (!TryPlanDoorPlacement(m_world, px, py, pz, use.face, doorBlockId, m_yRot, doorPlan))
             {
                 resyncPlacementPrediction();
                 sendActualTileState(px, py + 1, pz);
                 return;
             }
 
-            const int dir = GetDoorDirectionFromPlayerYaw(m_yRot);
-            int xra = 0;
-            int zra = 0;
-            if (dir == 0) zra = 1;
-            else if (dir == 1) xra = -1;
-            else if (dir == 2) zra = -1;
-            else xra = 1;
+            const int oldLowerId = getWorldBlockId(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
+            const int oldLowerData = getWorldBlockData(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
+            const int oldUpperId = getWorldBlockId(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
+            const int oldUpperData = getWorldBlockData(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
 
-            const int solidLeft =
-                (isTopSolidBlocking(px - xra, py, pz - zra) ? 1 : 0) +
-                (isTopSolidBlocking(px - xra, py + 1, pz - zra) ? 1 : 0);
-            const int solidRight =
-                (isTopSolidBlocking(px + xra, py, pz + zra) ? 1 : 0) +
-                (isTopSolidBlocking(px + xra, py + 1, pz + zra) ? 1 : 0);
-
-            const bool doorLeft =
-                (getWorldBlockId(px - xra, py, pz - zra) == doorBlockId) ||
-                (getWorldBlockId(px - xra, py + 1, pz - zra) == doorBlockId);
-            const bool doorRight =
-                (getWorldBlockId(px + xra, py, pz + zra) == doorBlockId) ||
-                (getWorldBlockId(px + xra, py + 1, pz + zra) == doorBlockId);
-
-            bool flip = false;
-            if (doorLeft && !doorRight)
-                flip = true;
-            else if (solidRight > solidLeft)
-                flip = true;
-
-            const int oldLowerId = getWorldBlockId(px, py, pz);
-            const int oldLowerData = getWorldBlockData(px, py, pz);
-            const int oldUpperId = getWorldBlockId(px, py + 1, pz);
-            const int oldUpperData = getWorldBlockData(px, py + 1, pz);
-
-            if (!m_world->SetBlock(px, py, pz, doorBlockId, dir) ||
-                !m_world->SetBlock(px, py + 1, pz, doorBlockId, 0x8 | (flip ? 1 : 0)))
+            if (!m_world->SetBlock(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ, doorPlan.blockId, doorPlan.lowerData) ||
+                !m_world->SetBlock(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ, doorPlan.blockId, doorPlan.upperData))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(px, py + 1, pz);
+                sendActualTileState(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
                 return;
             }
 
             Logger::Info("Server", "'%ls' placed door %d at (%d,%d,%d) dir=%d flip=%d",
-                m_playerName.c_str(), doorBlockId, px, py, pz, dir, flip ? 1 : 0);
+                m_playerName.c_str(), doorPlan.blockId, doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ,
+                doorPlan.lowerData, (doorPlan.upperData & 1) ? 1 : 0);
 
             consumeSelectedPlacementItem();
-            notifyBlockPlaced(px, py, pz, doorBlockId, dir, oldLowerId, oldLowerData);
-            notifyBlockPlaced(px, py + 1, pz, doorBlockId, 0x8 | (flip ? 1 : 0), oldUpperId, oldUpperData);
+            notifyBlockPlaced(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ, doorPlan.blockId, doorPlan.lowerData, oldLowerId, oldLowerData);
+            notifyBlockPlaced(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ, doorPlan.blockId, doorPlan.upperData, oldUpperId, oldUpperData);
             return;
         }
 
@@ -2524,58 +2452,32 @@ namespace LCEServer
             return;
         }
 
-        if (placedBlockId == 17) // logs
+        if (!TryResolvePlacementData(
+                m_world,
+                placedBlockId,
+                use.itemDamage,
+                px,
+                py,
+                pz,
+                use.face,
+                m_x,
+                m_y,
+                m_z,
+                m_yRot,
+                placedBlockData))
         {
-            placedBlockData = GetRotatedPillarDataFromFace(use.itemDamage, use.face);
+            resyncPlacementPrediction();
+            return;
         }
-        else if (placedBlockId == 69) // lever
-        {
-            int leverData = 0;
-            if (!BlockPlacement::TryGetLeverPlacementData(m_world, px, py, pz, use.face, m_yRot, leverData))
-            {
-                resyncPlacementPrediction();
-                return;
-            }
-            placedBlockData = leverData;
-        }
-        else if (placedBlockId == 77 || placedBlockId == 143) // buttons
-        {
-            int buttonData = 0;
-            if (!BlockPlacement::TryGetButtonPlacementData(m_world, px, py, pz, use.face, buttonData))
-            {
-                resyncPlacementPrediction();
-                return;
-            }
-            placedBlockData = buttonData;
-        }
-        else if (placedBlockId == 29 || placedBlockId == 33) // sticky/normal piston
-        {
-            placedBlockData = GetPistonFacingForPlacement(px, py, pz, m_x, m_y, m_z, m_yRot);
-        }
-        else if (placedBlockId == 54 || placedBlockId == 146 || placedBlockId == 61 || placedBlockId == 62)
-        {
-            placedBlockData = GetFacingFromPlayerYaw(m_yRot);
-        }
-        else if (placedBlockId == 93 || placedBlockId == 149) // repeater/comparator
-        {
-            placedBlockData = GetDiodeDirectionFromPlayerYaw(m_yRot);
-        }
-        else if (placedBlockId == 50 || placedBlockId == 75 || placedBlockId == 76) // torches
-        {
-            int torchData = 0;
-            if (!BlockPlacement::TryGetTorchPlacementData(m_world, px, py, pz, use.face, torchData))
-            {
-                resyncPlacementPrediction();
-                return;
-            }
 
-            placedBlockData = torchData;
+        if (placedBlockId == 50 || placedBlockId == 75 || placedBlockId == 76) // torches
+        {
             if (placedBlockId == 76)
             {
                 int supportX = 0;
                 int supportY = 0;
                 int supportZ = 0;
-                if (TryGetMinimalTorchSupportPosition(torchData, px, py, pz, supportX, supportY, supportZ) &&
+                if (TryGetMinimalTorchSupportPosition(placedBlockData, px, py, pz, supportX, supportY, supportZ) &&
                     IsMinimalBlockPoweredAt(m_world, supportX, supportY, supportZ, px, py, pz))
                 {
                     placedBlockId = 75;
