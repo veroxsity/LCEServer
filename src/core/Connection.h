@@ -199,6 +199,7 @@ namespace LCEServer
         void HandlePlayerCommand(const uint8_t* data, int size);
         void HandleRespawn(const uint8_t* data, int size);
         void HandleClientCommand(const uint8_t* data, int size);
+        void SendActualTileState(int x, int y, int z);
         void SendPreLoginResponse();
         void SendLoginResponse();
         void SendSpawnSequence();

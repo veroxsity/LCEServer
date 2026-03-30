@@ -254,6 +254,8 @@ namespace LCEServer
 
         using TileSupport::IsPressurePlateBlock;
         using TileSupport::TryGetWorldBlock;
+        using TileSupport::GetWorldBlockId;
+        using TileSupport::GetWorldBlockData;
 
         using RedstoneLogic::TryGetMinimalTorchSupportPosition;
         using RedstoneLogic::GetMinimalDiodeDirection;
@@ -271,6 +273,7 @@ namespace LCEServer
         using BlockInteraction::TryResolveComparatorToggle;
         using BlockInteraction::TryResolveButtonPress;
         using BlockInteraction::TryResolvePressurePlateState;
+        using BlockInteraction::TryResolveWorkbenchInteractionTarget;
         using BlockInteraction::ShouldApplyDiodeTransition;
         using BlockInteraction::TryResolveButtonRelease;
         using BlockInteraction::GetPressurePlateTickAction;
@@ -280,6 +283,17 @@ namespace LCEServer
     {
         return (static_cast<int64_t>(cx) << 32) |
             static_cast<uint32_t>(cz);
+    }
+
+    void Connection::SendActualTileState(int x, int y, int z)
+    {
+        if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
+            return;
+
+        const int blockId = GetWorldBlockId(m_world, x, y, z);
+        const int blockData = GetWorldBlockData(m_world, x, y, z);
+        const int wireBlockId = (blockId == 0) ? 255 : blockId;
+        SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
     }
 
     int Connection::InventoryIndexToMenuSlot(int inventoryIndex)
@@ -603,6 +617,7 @@ namespace LCEServer
                 m_pendingPressurePlateChecks.erase(
                     m_pendingPressurePlateChecks.begin() + static_cast<std::ptrdiff_t>(i));
             }
+
         }
 
         // Drain packet queue
@@ -1798,38 +1813,9 @@ namespace LCEServer
 
         if (m_world)
         {
-            auto sendActualTileState = [this](int x, int y, int z)
-            {
-                if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                    return;
-
-                int blockId = 0;
-                int blockData = 0;
-                ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
-                if (chunk && !chunk->blocks.empty())
-                {
-                    int lx = ((x % 16) + 16) % 16;
-                    int lz = ((z % 16) + 16) % 16;
-                    int idx = ChunkBlockIndex(lx, lz, y);
-                    if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
-                    {
-                        blockId = chunk->blocks[idx];
-                        if (!chunk->data.empty())
-                        {
-                            int nibbleIndex = idx >> 1;
-                            uint8_t packed = chunk->data[nibbleIndex];
-                            blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-                        }
-                    }
-                }
-
-                int wireBlockId = (blockId == 0) ? 255 : blockId;
-                SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
-            };
-
             auto resyncPlacementPrediction = [&]()
             {
-                sendActualTileState(use.x, use.y, use.z);
+                SendActualTileState(use.x, use.y, use.z);
 
                 int px = use.x;
                 int py = use.y;
@@ -1837,7 +1823,7 @@ namespace LCEServer
                 if (TryResolvePredictedPlacementTarget(m_world, use.x, use.y, use.z, use.face, px, py, pz) &&
                     (px != use.x || py != use.y || pz != use.z))
                 {
-                    sendActualTileState(px, py, pz);
+                    SendActualTileState(px, py, pz);
                 }
             };
 
@@ -1894,6 +1880,51 @@ namespace LCEServer
             };
 
             ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
+            int clickedBlockIdForLog = 0;
+            int clickedBlockDataForLog = 0;
+            TryGetWorldBlock(m_world, use.x, use.y, use.z, clickedBlockIdForLog, clickedBlockDataForLog);
+            int workbenchX = use.x;
+            int workbenchY = use.y;
+            int workbenchZ = use.z;
+            const bool resolvedWorkbench = TryResolveWorkbenchInteractionTarget(
+                    m_world,
+                    use.x,
+                    use.y,
+                    use.z,
+                    use.face & 0xFF,
+                    workbenchX,
+                    workbenchY,
+                    workbenchZ);
+            if (clickedBlockIdForLog == 58 || resolvedWorkbench)
+            {
+                Logger::Info(
+                    "WB-DBG",
+                    "'%ls' UseItem item=%d:%d target=(%d,%d,%d) face=%d click=(%.2f,%.2f,%.2f) clicked=%d:%d resolved=%d workbench=(%d,%d,%d)",
+                    m_playerName.c_str(),
+                    use.itemId,
+                    use.itemDamage,
+                    use.x,
+                    use.y,
+                    use.z,
+                    use.face,
+                    use.clickX,
+                    use.clickY,
+                    use.clickZ,
+                    clickedBlockIdForLog,
+                    clickedBlockDataForLog,
+                    resolvedWorkbench ? 1 : 0,
+                    workbenchX,
+                    workbenchY,
+                    workbenchZ);
+            }
+            if (resolvedWorkbench)
+            {
+                resyncPlacementPrediction();
+                if (m_openContainerType == ContainerType::Workbench)
+                    CloseContainerIfOpen();
+                return;
+            }
+
             if (clickedChunk && !clickedChunk->blocks.empty() &&
                 use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
             {
@@ -1902,13 +1933,6 @@ namespace LCEServer
                 int idx = ChunkBlockIndex(lx, lz, use.y);
                 if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
                 {
-                    if (clickedChunk->blocks[idx] == 58)
-                    {
-                        resyncPlacementPrediction();
-                        OpenWorkbenchContainer(use.x, use.y, use.z);
-                        return;
-                    }
-
                     int clickedBlockId = clickedChunk->blocks[idx];
                     int clickedBlockData = 0;
                     if (!clickedChunk->data.empty())
@@ -2026,37 +2050,7 @@ namespace LCEServer
             {
                 SendInventorySlotUpdate(m_hotbarSlot);
                 if (m_world)
-                {
-                    auto sendActualTileState = [this](int x, int y, int z)
-                    {
-                        if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                            return;
-
-                        int blockId = 0;
-                        int blockData = 0;
-                        ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
-                        if (chunk && !chunk->blocks.empty())
-                        {
-                            int lx = ((x % 16) + 16) % 16;
-                            int lz = ((z % 16) + 16) % 16;
-                            int idx = ChunkBlockIndex(lx, lz, y);
-                            if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
-                            {
-                                blockId = chunk->blocks[idx];
-                                if (!chunk->data.empty())
-                                {
-                                    int nibbleIndex = idx >> 1;
-                                    uint8_t packed = chunk->data[nibbleIndex];
-                                    blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-                                }
-                            }
-                        }
-
-                        int wireBlockId = (blockId == 0) ? 255 : blockId;
-                        SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
-                    };
-                    sendActualTileState(use.x, use.y, use.z);
-                }
+                    SendActualTileState(use.x, use.y, use.z);
                 return;
             }
         }
@@ -2066,125 +2060,23 @@ namespace LCEServer
 
         if (!m_world) return;
 
-        auto sendActualTileState = [this](int x, int y, int z)
-        {
-            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                return;
-
-            int blockId = 0;
-            int blockData = 0;
-            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
-            if (chunk && !chunk->blocks.empty())
-            {
-                int lx = ((x % 16) + 16) % 16;
-                int lz = ((z % 16) + 16) % 16;
-                int idx = ChunkBlockIndex(lx, lz, y);
-                if (idx >= 0 && idx < static_cast<int>(chunk->blocks.size()))
-                {
-                    blockId = chunk->blocks[idx];
-                    if (!chunk->data.empty())
-                    {
-                        int nibbleIndex = idx >> 1;
-                        uint8_t packed = chunk->data[nibbleIndex];
-                        blockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-                    }
-                }
-            }
-
-            int wireBlockId = (blockId == 0) ? 255 : blockId;
-            SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
-        };
-
         auto resyncPlacementPrediction = [&]()
         {
-            sendActualTileState(use.x, use.y, use.z);
+            SendActualTileState(use.x, use.y, use.z);
 
             int px = use.x;
             int py = use.y;
             int pz = use.z;
-            bool hasPredictedTarget = false;
-
-            if (use.face == -1)
-            {
-                hasPredictedTarget = true;
-            }
-            else
-            {
-                static const int dx[] = { 0,  0,  0,  0, -1, 1 };
-                static const int dy[] = {-1,  1,  0,  0,  0, 0 };
-                static const int dz[] = { 0,  0, -1,  1,  0, 0 };
-
-                int face = use.face & 0xFF;
-                if (face <= 5)
-                {
-                    ChunkData* clickedChunk = m_world->GetChunk(use.x >> 4, use.z >> 4);
-                    bool clickedReplaceable = false;
-                    if (clickedChunk && !clickedChunk->blocks.empty() &&
-                        use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
-                    {
-                        int lx = ((use.x % 16) + 16) % 16;
-                        int lz = ((use.z % 16) + 16) % 16;
-                        int idx = ChunkBlockIndex(lx, lz, use.y);
-                        if (idx >= 0 && idx < static_cast<int>(clickedChunk->blocks.size()))
-                            clickedReplaceable = IsReplaceableBlock(clickedChunk->blocks[idx]);
-                    }
-
-                    if (!clickedReplaceable)
-                    {
-                        px = use.x + dx[face];
-                        py = use.y + dy[face];
-                        pz = use.z + dz[face];
-                    }
-                    hasPredictedTarget = true;
-                }
-            }
-
-            if (hasPredictedTarget &&
+            if (TryResolvePredictedPlacementTarget(m_world, use.x, use.y, use.z, use.face, px, py, pz) &&
                 (px != use.x || py != use.y || pz != use.z))
             {
-                sendActualTileState(px, py, pz);
+                SendActualTileState(px, py, pz);
             }
         };
 
         int px = use.x;
         int py = use.y;
         int pz = use.z;
-
-        auto getWorldBlockId = [&](int x, int y, int z) -> int
-        {
-            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                return 0;
-
-            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
-            if (!chunk || chunk->blocks.empty())
-                return 0;
-
-            int lx = ((x % 16) + 16) % 16;
-            int lz = ((z % 16) + 16) % 16;
-            int idx = ChunkBlockIndex(lx, lz, y);
-            if (idx < 0 || idx >= static_cast<int>(chunk->blocks.size()))
-                return 0;
-            return chunk->blocks[idx];
-        };
-
-        auto getWorldBlockData = [&](int x, int y, int z) -> int
-        {
-            if (!m_world || y < 0 || y >= LEGACY_WORLD_HEIGHT)
-                return 0;
-
-            ChunkData* chunk = m_world->GetChunk(x >> 4, z >> 4);
-            if (!chunk || chunk->data.empty())
-                return 0;
-
-            int lx = ((x % 16) + 16) % 16;
-            int lz = ((z % 16) + 16) % 16;
-            int idx = ChunkBlockIndex(lx, lz, y);
-            if (idx < 0 || idx >= kChunkTotalBlocks)
-                return 0;
-            int nibbleIndex = idx >> 1;
-            uint8_t packed = chunk->data[nibbleIndex];
-            return (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
-        };
 
         auto canReplaceAt = [&](int x, int y, int z) -> bool
         {
@@ -2193,7 +2085,7 @@ namespace LCEServer
 
         auto isTopSolidBlocking = [&](int x, int y, int z) -> bool
         {
-            int blockId = getWorldBlockId(x, y, z);
+            int blockId = GetWorldBlockId(m_world, x, y, z);
             return IsTopSolidSupportBlock(blockId);
         };
 
@@ -2216,8 +2108,8 @@ namespace LCEServer
                 onBlockUpdate(this, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
         };
 
-        const int clickedBlockIdForPlacement = getWorldBlockId(use.x, use.y, use.z);
-        const int clickedBlockDataForPlacement = getWorldBlockData(use.x, use.y, use.z);
+        const int clickedBlockIdForPlacement = GetWorldBlockId(m_world, use.x, use.y, use.z);
+        const int clickedBlockDataForPlacement = GetWorldBlockData(m_world, use.x, use.y, use.z);
         px = use.x;
         py = use.y;
         pz = use.z;
@@ -2251,20 +2143,20 @@ namespace LCEServer
             if (!CanPlaceBed(m_world, bedPlan))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
+                SendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
                 return;
             }
 
-            const int oldFootId = getWorldBlockId(bedPlan.footX, bedPlan.footY, bedPlan.footZ);
-            const int oldFootData = getWorldBlockData(bedPlan.footX, bedPlan.footY, bedPlan.footZ);
-            const int oldHeadId = getWorldBlockId(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
-            const int oldHeadData = getWorldBlockData(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
+            const int oldFootId = GetWorldBlockId(m_world, bedPlan.footX, bedPlan.footY, bedPlan.footZ);
+            const int oldFootData = GetWorldBlockData(m_world, bedPlan.footX, bedPlan.footY, bedPlan.footZ);
+            const int oldHeadId = GetWorldBlockId(m_world, bedPlan.headX, bedPlan.headY, bedPlan.headZ);
+            const int oldHeadData = GetWorldBlockData(m_world, bedPlan.headX, bedPlan.headY, bedPlan.headZ);
 
             if (!m_world->SetBlock(bedPlan.footX, bedPlan.footY, bedPlan.footZ, 26, bedPlan.footData) ||
                 !m_world->SetBlock(bedPlan.headX, bedPlan.headY, bedPlan.headZ, 26, bedPlan.headData))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
+                SendActualTileState(bedPlan.headX, bedPlan.headY, bedPlan.headZ);
                 return;
             }
 
@@ -2284,20 +2176,20 @@ namespace LCEServer
             if (!TryPlanDoorPlacement(m_world, px, py, pz, use.face, doorBlockId, m_yRot, doorPlan))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(px, py + 1, pz);
+                SendActualTileState(px, py + 1, pz);
                 return;
             }
 
-            const int oldLowerId = getWorldBlockId(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
-            const int oldLowerData = getWorldBlockData(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
-            const int oldUpperId = getWorldBlockId(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
-            const int oldUpperData = getWorldBlockData(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
+            const int oldLowerId = GetWorldBlockId(m_world, doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
+            const int oldLowerData = GetWorldBlockData(m_world, doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ);
+            const int oldUpperId = GetWorldBlockId(m_world, doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
+            const int oldUpperData = GetWorldBlockData(m_world, doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
 
             if (!m_world->SetBlock(doorPlan.lowerX, doorPlan.lowerY, doorPlan.lowerZ, doorPlan.blockId, doorPlan.lowerData) ||
                 !m_world->SetBlock(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ, doorPlan.blockId, doorPlan.upperData))
             {
                 resyncPlacementPrediction();
-                sendActualTileState(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
+                SendActualTileState(doorPlan.upperX, doorPlan.upperY, doorPlan.upperZ);
                 return;
             }
 

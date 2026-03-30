@@ -42,6 +42,16 @@ namespace LCEServer::BlockInteraction
         bool occupied,
         InteractionResult& outResult);
 
+    bool TryResolveWorkbenchInteractionTarget(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ);
+
     bool ShouldApplyDiodeTransition(
         World* world,
         int x,

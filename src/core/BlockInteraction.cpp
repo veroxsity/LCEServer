@@ -75,6 +75,84 @@ namespace LCEServer::BlockInteraction
         return true;
     }
 
+    bool TryResolveWorkbenchInteractionTarget(
+        World* world,
+        int x,
+        int y,
+        int z,
+        int face,
+        int& outX,
+        int& outY,
+        int& outZ)
+    {
+        outX = x;
+        outY = y;
+        outZ = z;
+
+        int blockId = 0;
+        int blockData = 0;
+        if (TryGetWorldBlock(world, x, y, z, blockId, blockData) && blockId == 58)
+            return true;
+
+        if (face < 0 || face > 5)
+            return false;
+
+        outX = x;
+        outY = y;
+        outZ = z;
+        switch (face)
+        {
+        case 0: ++outY; break;
+        case 1: --outY; break;
+        case 2: ++outZ; break;
+        case 3: --outZ; break;
+        case 4: ++outX; break;
+        case 5: --outX; break;
+        default: return false;
+        }
+
+        if (TryGetWorldBlock(world, outX, outY, outZ, blockId, blockData) && blockId == 58)
+            return true;
+
+        int foundX = 0;
+        int foundY = 0;
+        int foundZ = 0;
+        int matches = 0;
+        static const int kNeighborOffsets[6][3] =
+        {
+            { 0, -1,  0 },
+            { 0,  1,  0 },
+            { 0,  0, -1 },
+            { 0,  0,  1 },
+            {-1,  0,  0 },
+            { 1,  0,  0 }
+        };
+
+        for (const auto& offset : kNeighborOffsets)
+        {
+            const int neighborX = x + offset[0];
+            const int neighborY = y + offset[1];
+            const int neighborZ = z + offset[2];
+            if (TryGetWorldBlock(world, neighborX, neighborY, neighborZ, blockId, blockData) && blockId == 58)
+            {
+                foundX = neighborX;
+                foundY = neighborY;
+                foundZ = neighborZ;
+                ++matches;
+            }
+        }
+
+        if (matches == 1)
+        {
+            outX = foundX;
+            outY = foundY;
+            outZ = foundZ;
+            return true;
+        }
+
+        return false;
+    }
+
     bool ShouldApplyDiodeTransition(
         World* world,
         int x,

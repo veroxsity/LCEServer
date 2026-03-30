@@ -127,6 +127,20 @@ namespace LCEServer::TileSupport
         return true;
     }
 
+    int GetWorldBlockId(World* world, int x, int y, int z)
+    {
+        int blockId = 0;
+        int blockData = 0;
+        return TryGetWorldBlock(world, x, y, z, blockId, blockData) ? blockId : 0;
+    }
+
+    int GetWorldBlockData(World* world, int x, int y, int z)
+    {
+        int blockId = 0;
+        int blockData = 0;
+        return TryGetWorldBlock(world, x, y, z, blockId, blockData) ? blockData : 0;
+    }
+
     bool TryGetTorchSupportPosition(
         int blockData,
         int sourceX,
