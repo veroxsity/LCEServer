@@ -1,5 +1,6 @@
 // LCEServer — server.properties loader/saver
 #include "ServerConfig.h"
+#include <charconv>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -22,26 +23,43 @@ namespace LCEServer
         return s;
     }
 
-    static bool ParseBool(const std::string& v, bool def)
+    static bool TryParseBool(const std::string& v, bool& outValue)
     {
         std::string l = ToLower(Trim(v));
-        if (l == "true" || l == "1" || l == "yes") return true;
-        if (l == "false" || l == "0" || l == "no") return false;
-        return def;
+        if (l == "true" || l == "1" || l == "yes")
+        {
+            outValue = true;
+            return true;
+        }
+        if (l == "false" || l == "0" || l == "no")
+        {
+            outValue = false;
+            return true;
+        }
+        return false;
     }
 
-    static int ParseInt(const std::string& v, int def)
+    static bool TryParseInt(const std::string& v, int& outValue)
     {
-        try { return std::stoi(Trim(v)); }
-        catch (...) { return def; }
+        const std::string trimmed = Trim(v);
+        if (trimmed.empty())
+            return false;
+
+        const char* begin = trimmed.data();
+        const char* end = begin + trimmed.size();
+        auto result = std::from_chars(begin, end, outValue);
+        return result.ec == std::errc() && result.ptr == end;
     }
 
     static std::wstring Utf8ToWide(const std::string& s)
     {
         if (s.empty()) return L"";
         int needed = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+        if (needed <= 0)
+            return L"";
         std::wstring out(needed, 0);
-        MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], needed);
+        if (MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], needed) <= 0)
+            return L"";
         return out;
     }
 
@@ -49,9 +67,22 @@ namespace LCEServer
     {
         if (s.empty()) return "";
         int needed = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+        if (needed <= 0)
+            return "";
         std::string out(needed, 0);
-        WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], needed, nullptr, nullptr);
+        if (WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], needed, nullptr, nullptr) <= 0)
+            return "";
         return out;
+    }
+
+    template <typename T>
+    static T ClampValue(T value, T minValue, T maxValue)
+    {
+        if (value < minValue)
+            return minValue;
+        if (value > maxValue)
+            return maxValue;
+        return value;
     }
 
     uint32_t ServerConfig::BuildServerSettings() const
@@ -94,55 +125,89 @@ namespace LCEServer
             return (it != props.end()) ? it->second : def;
         };
 
+        auto parseIntProperty = [&](const char* key, int defaultValue) -> int
+        {
+            auto it = props.find(key);
+            if (it == props.end())
+                return defaultValue;
+
+            int parsedValue = defaultValue;
+            if (!TryParseInt(it->second, parsedValue))
+            {
+                Logger::Warn("Config",
+                    "Invalid integer for %s='%s'; using %d",
+                    key, it->second.c_str(), defaultValue);
+                return defaultValue;
+            }
+            return parsedValue;
+        };
+
+        auto parseBoolProperty = [&](const char* key, bool defaultValue) -> bool
+        {
+            auto it = props.find(key);
+            if (it == props.end())
+                return defaultValue;
+
+            bool parsedValue = defaultValue;
+            if (!TryParseBool(it->second, parsedValue))
+            {
+                Logger::Warn("Config",
+                    "Invalid boolean for %s='%s'; using %s",
+                    key, it->second.c_str(), defaultValue ? "true" : "false");
+                return defaultValue;
+            }
+            return parsedValue;
+        };
+
         // Network
-        cfg.serverPort     = ParseInt(get("server-port", "25565"), DEFAULT_PORT);
+        cfg.serverPort     = ClampValue(parseIntProperty("server-port", DEFAULT_PORT), 1, 65535);
         cfg.serverIp       = get("server-ip", "0.0.0.0");
         cfg.serverName     = get("server-name", "LCEServer");
-        cfg.lanAdvertise   = ParseBool(get("lan-advertise", "true"), true);
+        cfg.lanAdvertise   = parseBoolProperty("lan-advertise", true);
 
         // World
         cfg.levelName      = Utf8ToWide(get("level-name", "world"));
         cfg.levelId        = get("level-id", "");
         cfg.levelSeed      = get("level-seed", "");
         cfg.levelType      = get("level-type", "flat");
-        cfg.maxBuildHeight = ParseInt(
-            get("max-build-height", std::to_string(LEGACY_WORLD_HEIGHT)),
+        cfg.maxBuildHeight = parseIntProperty(
+            "max-build-height",
             LEGACY_WORLD_HEIGHT);
         if (cfg.maxBuildHeight <= 0 || cfg.maxBuildHeight > LEGACY_WORLD_HEIGHT)
             cfg.maxBuildHeight = LEGACY_WORLD_HEIGHT;
 
         // Game settings
-        cfg.gamemode            = ParseInt(get("gamemode", "0"), 0);
-        cfg.difficulty          = ParseInt(get("difficulty", "1"), 1);
-        cfg.pvp                 = ParseBool(get("pvp", "true"), true);
-        cfg.trustPlayers        = ParseBool(get("trust-players", "false"), false);
-        cfg.fireSpreads         = ParseBool(get("fire-spreads", "true"), true);
-        cfg.tnt                 = ParseBool(get("tnt", "true"), true);
-        cfg.spawnAnimals        = ParseBool(get("spawn-animals", "true"), true);
-        cfg.spawnNpcs           = ParseBool(get("spawn-npcs", "true"), true);
-        cfg.spawnMonsters       = ParseBool(get("spawn-monsters", "true"), true);
-        cfg.allowFlight         = ParseBool(get("allow-flight", "true"), true);
-        cfg.allowNether         = ParseBool(get("allow-nether", "true"), true);
-        cfg.generateStructures  = ParseBool(get("generate-structures", "true"), true);
-        cfg.bonusChest          = ParseBool(get("bonus-chest", "false"), false);
-        cfg.friendsOfFriends    = ParseBool(get("friends-of-friends", "true"), true);
-        cfg.gamertags           = ParseBool(get("gamertags", "true"), true);
-        cfg.bedrockFog          = ParseBool(get("bedrock-fog", "false"), false);
-        cfg.mobGriefing         = ParseBool(get("mob-griefing", "true"), true);
-        cfg.keepInventory       = ParseBool(get("keep-inventory", "false"), false);
-        cfg.naturalRegeneration = ParseBool(get("natural-regeneration", "true"), true);
-        cfg.doDaylightCycle     = ParseBool(get("do-daylight-cycle", "true"), true);
+        cfg.gamemode            = ClampValue(parseIntProperty("gamemode", 0), 0, 2);
+        cfg.difficulty          = ClampValue(parseIntProperty("difficulty", 1), 0, 3);
+        cfg.pvp                 = parseBoolProperty("pvp", true);
+        cfg.trustPlayers        = parseBoolProperty("trust-players", false);
+        cfg.fireSpreads         = parseBoolProperty("fire-spreads", true);
+        cfg.tnt                 = parseBoolProperty("tnt", true);
+        cfg.spawnAnimals        = parseBoolProperty("spawn-animals", true);
+        cfg.spawnNpcs           = parseBoolProperty("spawn-npcs", true);
+        cfg.spawnMonsters       = parseBoolProperty("spawn-monsters", true);
+        cfg.allowFlight         = parseBoolProperty("allow-flight", true);
+        cfg.allowNether         = parseBoolProperty("allow-nether", true);
+        cfg.generateStructures  = parseBoolProperty("generate-structures", true);
+        cfg.bonusChest          = parseBoolProperty("bonus-chest", false);
+        cfg.friendsOfFriends    = parseBoolProperty("friends-of-friends", true);
+        cfg.gamertags           = parseBoolProperty("gamertags", true);
+        cfg.bedrockFog          = parseBoolProperty("bedrock-fog", false);
+        cfg.mobGriefing         = parseBoolProperty("mob-griefing", true);
+        cfg.keepInventory       = parseBoolProperty("keep-inventory", false);
+        cfg.naturalRegeneration = parseBoolProperty("natural-regeneration", true);
+        cfg.doDaylightCycle     = parseBoolProperty("do-daylight-cycle", true);
 
         // Server
-        cfg.maxPlayers       = ParseInt(get("max-players", "8"), 8);
-        int vd = ParseInt(get("view-distance", "4"), 4);
-        cfg.viewDistance     = vd < 2 ? 2 : vd > 16 ? 16 : vd;
-        int cpt = ParseInt(get("chunks-per-tick", "10"), 10);
-        cfg.chunksPerTick    = cpt < 1 ? 1 : cpt > 64 ? 64 : cpt;
+        cfg.maxPlayers       = ClampValue(parseIntProperty("max-players", 8), 1, MAX_PLAYERS_HARD);
+        int vd = parseIntProperty("view-distance", 4);
+        cfg.viewDistance     = ClampValue(vd, 2, 16);
+        int cpt = parseIntProperty("chunks-per-tick", 10);
+        cfg.chunksPerTick    = ClampValue(cpt, 1, 64);
         cfg.motd             = get("motd", "A Minecraft LCE Server");
-        cfg.autosaveInterval = ParseInt(get("autosave-interval", "300"), 300);
-        cfg.disableSaving    = ParseBool(get("disable-saving", "false"), false);
-        cfg.whiteList        = ParseBool(get("white-list", "false"), false);
+        cfg.autosaveInterval = ClampValue(parseIntProperty("autosave-interval", 300), 0, 86400);
+        cfg.disableSaving    = parseBoolProperty("disable-saving", false);
+        cfg.whiteList        = parseBoolProperty("white-list", false);
 
         // Log level
         std::string ll = ToLower(get("log-level", "info"));
@@ -152,7 +217,7 @@ namespace LCEServer
         else                    cfg.logLevel = LogLevel::Info;
 
         // RCON
-        cfg.rconPort     = ParseInt(get("rcon-port", "25575"), 25575);
+        cfg.rconPort     = ClampValue(parseIntProperty("rcon-port", 25575), 1, 65535);
         cfg.rconPassword = get("rcon-password", "");
 
         return cfg;

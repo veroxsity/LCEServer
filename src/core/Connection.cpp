@@ -296,6 +296,93 @@ namespace LCEServer
         SendPacket(PacketHandler::WriteTileUpdate(x, y, z, wireBlockId, blockData, 0));
     }
 
+    void Connection::NotifyBlockUpdate(
+        int x,
+        int y,
+        int z,
+        int newBlockId,
+        int newBlockData,
+        int oldBlockId,
+        int oldBlockData)
+    {
+        if (onBlockUpdate)
+            onBlockUpdate(this, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
+    }
+
+    void Connection::ScheduleDiodeTransition(
+        int x,
+        int y,
+        int z,
+        int expectedBlockId,
+        int targetBlockId,
+        int blockData,
+        int delayTicks)
+    {
+        m_pendingDiodeTransitions.erase(
+            std::remove_if(
+                m_pendingDiodeTransitions.begin(),
+                m_pendingDiodeTransitions.end(),
+                [&](const PendingDiodeTransition& pending)
+                {
+                    return pending.x == x && pending.y == y && pending.z == z;
+                }),
+            m_pendingDiodeTransitions.end());
+
+        PendingDiodeTransition pending;
+        pending.x = x;
+        pending.y = y;
+        pending.z = z;
+        pending.expectedBlockId = expectedBlockId;
+        pending.targetBlockId = targetBlockId;
+        pending.blockData = blockData;
+        pending.ticksRemaining = delayTicks;
+        m_pendingDiodeTransitions.push_back(pending);
+    }
+
+    void Connection::RefreshRedstoneAround(int x, int y, int z)
+    {
+        if (!m_world)
+            return;
+
+        RefreshMinimalRedstoneAround(
+            m_world,
+            x, y, z,
+            [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+            {
+                NotifyBlockUpdate(blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+            },
+            [this](int dustX, int dustY, int dustZ, int oldData, int newData)
+            {
+                NotifyBlockUpdate(dustX, dustY, dustZ, 55, newData, 55, oldData);
+            },
+            [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+            {
+                ScheduleDiodeTransition(dx, dy, dz, expectedBlockId, targetBlockId, blockData, delayTicks);
+            });
+    }
+
+    void Connection::CleanupUnsupportedBlocksAround(int x, int y, int z)
+    {
+        if (!m_world)
+            return;
+
+        CleanupUnsupportedSupportSensitiveBlocksAround(
+            m_world,
+            x, y, z,
+            [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
+            {
+                NotifyBlockUpdate(blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
+            },
+            [this](int dustX, int dustY, int dustZ, int previousData, int newData)
+            {
+                NotifyBlockUpdate(dustX, dustY, dustZ, 55, newData, 55, previousData);
+            },
+            [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
+            {
+                ScheduleDiodeTransition(dx, dy, dz, expectedBlockId, targetBlockId, blockData, delayTicks);
+            });
+    }
+
     int Connection::InventoryIndexToMenuSlot(int inventoryIndex)
     {
         if (inventoryIndex < 0 || inventoryIndex >= 36)
@@ -406,48 +493,6 @@ namespace LCEServer
             return TryGetWorldBlock(m_world, x, y, z, outBlockId, outBlockData);
         };
 
-        auto scheduleAwareRedstoneRefresh = [this](int x, int y, int z)
-        {
-            if (!m_world)
-                return;
-
-            RefreshMinimalRedstoneAround(
-                m_world,
-                x, y, z,
-                [this](int bx, int by, int bz, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, bx, by, bz, newBlockId, newBlockData, oldBlockId, oldBlockData);
-                },
-                [this](int dx, int dy, int dz, int oldData, int newData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, dx, dy, dz, 55, newData, 55, oldData);
-                },
-                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
-                {
-                    m_pendingDiodeTransitions.erase(
-                        std::remove_if(
-                            m_pendingDiodeTransitions.begin(),
-                            m_pendingDiodeTransitions.end(),
-                            [&](const PendingDiodeTransition& pending)
-                            {
-                                return pending.x == dx && pending.y == dy && pending.z == dz;
-                            }),
-                        m_pendingDiodeTransitions.end());
-
-                    PendingDiodeTransition pending;
-                    pending.x = dx;
-                    pending.y = dy;
-                    pending.z = dz;
-                    pending.expectedBlockId = expectedBlockId;
-                    pending.targetBlockId = targetBlockId;
-                    pending.blockData = blockData;
-                    pending.ticksRemaining = delayTicks;
-                    m_pendingDiodeTransitions.push_back(pending);
-                });
-        };
-
         auto ensurePressurePlateCheck = [this](int x, int y, int z, int blockId)
         {
             for (PendingPressurePlateCheck& pending : m_pendingPressurePlateChecks)
@@ -469,7 +514,7 @@ namespace LCEServer
             m_pendingPressurePlateChecks.push_back(pending);
         };
 
-        auto updatePressurePlateState = [this, &getWorldBlock, &scheduleAwareRedstoneRefresh, &ensurePressurePlateCheck](
+        auto updatePressurePlateState = [this, &getWorldBlock, &ensurePressurePlateCheck](
             int x,
             int y,
             int z) -> bool
@@ -497,10 +542,8 @@ namespace LCEServer
             if (!m_world->SetBlock(x, y, z, interaction.blockId, interaction.blockData))
                 return occupied;
 
-            if (onBlockUpdate)
-                onBlockUpdate(this, x, y, z, interaction.blockId, interaction.blockData, blockId, blockData);
-
-            scheduleAwareRedstoneRefresh(x, y, z);
+            NotifyBlockUpdate(x, y, z, interaction.blockId, interaction.blockData, blockId, blockData);
+            RefreshRedstoneAround(x, y, z);
             if (occupied)
                 ensurePressurePlateCheck(x, y, z, blockId);
             return occupied;
@@ -530,13 +573,11 @@ namespace LCEServer
                         pending.blockData) &&
                     m_world->SetBlock(pending.x, pending.y, pending.z, pending.targetBlockId, pending.blockData))
                 {
-                    if (onBlockUpdate)
-                    {
-                        onBlockUpdate(this, pending.x, pending.y, pending.z,
-                            pending.targetBlockId, pending.blockData,
-                            pending.expectedBlockId, pending.blockData);
-                    }
-                    scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                    NotifyBlockUpdate(
+                        pending.x, pending.y, pending.z,
+                        pending.targetBlockId, pending.blockData,
+                        pending.expectedBlockId, pending.blockData);
+                    RefreshRedstoneAround(pending.x, pending.y, pending.z);
                 }
 
                 m_pendingDiodeTransitions.erase(
@@ -564,10 +605,11 @@ namespace LCEServer
                     m_world->SetBlock(pending.x, pending.y, pending.z, interaction.blockId, interaction.blockData) &&
                     onBlockUpdate)
                 {
-                    onBlockUpdate(this, pending.x, pending.y, pending.z,
+                    NotifyBlockUpdate(
+                        pending.x, pending.y, pending.z,
                         interaction.blockId, interaction.blockData,
                         pending.blockId, pending.baseData | 0x8);
-                    scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                    RefreshRedstoneAround(pending.x, pending.y, pending.z);
                 }
 
                 m_pendingButtonReleases.erase(m_pendingButtonReleases.begin() + static_cast<std::ptrdiff_t>(i));
@@ -604,13 +646,11 @@ namespace LCEServer
                 {
                     if (m_world->SetBlock(pending.x, pending.y, pending.z, pending.blockId, 0))
                     {
-                        if (onBlockUpdate)
-                        {
-                            onBlockUpdate(this, pending.x, pending.y, pending.z,
-                                pending.blockId, 0,
-                                pending.blockId, 1);
-                        }
-                        scheduleAwareRedstoneRefresh(pending.x, pending.y, pending.z);
+                        NotifyBlockUpdate(
+                            pending.x, pending.y, pending.z,
+                            pending.blockId, 0,
+                            pending.blockId, 1);
+                        RefreshRedstoneAround(pending.x, pending.y, pending.z);
                     }
                 }
 
@@ -1571,80 +1611,9 @@ namespace LCEServer
             if (!chunk)
                 return false;
 
-            if (onBlockUpdate)
-                onBlockUpdate(this, x, y, z, 0, 0, oldBlockId, oldBlockData);
-
-            CleanupUnsupportedSupportSensitiveBlocksAround(
-                m_world,
-                x, y, z,
-                [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
-                },
-                [this](int dustX, int dustY, int dustZ, int previousData, int newData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
-                },
-                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
-                {
-                    m_pendingDiodeTransitions.erase(
-                        std::remove_if(
-                            m_pendingDiodeTransitions.begin(),
-                            m_pendingDiodeTransitions.end(),
-                            [&](const PendingDiodeTransition& pending)
-                            {
-                                return pending.x == dx && pending.y == dy && pending.z == dz;
-                            }),
-                        m_pendingDiodeTransitions.end());
-
-                    PendingDiodeTransition pending;
-                    pending.x = dx;
-                    pending.y = dy;
-                    pending.z = dz;
-                    pending.expectedBlockId = expectedBlockId;
-                    pending.targetBlockId = targetBlockId;
-                    pending.blockData = blockData;
-                    pending.ticksRemaining = delayTicks;
-                    m_pendingDiodeTransitions.push_back(pending);
-                });
-
-            RefreshMinimalRedstoneAround(
-                m_world,
-                x, y, z,
-                [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
-                },
-                [this](int dustX, int dustY, int dustZ, int previousData, int newData)
-                {
-                    if (onBlockUpdate)
-                        onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
-                },
-                [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
-                {
-                    m_pendingDiodeTransitions.erase(
-                        std::remove_if(
-                            m_pendingDiodeTransitions.begin(),
-                            m_pendingDiodeTransitions.end(),
-                            [&](const PendingDiodeTransition& pending)
-                            {
-                                return pending.x == dx && pending.y == dy && pending.z == dz;
-                            }),
-                        m_pendingDiodeTransitions.end());
-
-                    PendingDiodeTransition pending;
-                    pending.x = dx;
-                    pending.y = dy;
-                    pending.z = dz;
-                    pending.expectedBlockId = expectedBlockId;
-                    pending.targetBlockId = targetBlockId;
-                    pending.blockData = blockData;
-                    pending.ticksRemaining = delayTicks;
-                    m_pendingDiodeTransitions.push_back(pending);
-                });
+            NotifyBlockUpdate(x, y, z, 0, 0, oldBlockId, oldBlockData);
+            CleanupUnsupportedBlocksAround(x, y, z);
+            RefreshRedstoneAround(x, y, z);
             return true;
         };
 
@@ -1808,9 +1777,6 @@ namespace LCEServer
         if (!PacketHandler::ReadUseItem(data, size, use))
             return;
 
-        if (m_openContainerId > 0)
-            CloseContainerIfOpen();
-
         if (m_world)
         {
             auto resyncPlacementPrediction = [&]()
@@ -1825,45 +1791,45 @@ namespace LCEServer
                 {
                     SendActualTileState(px, py, pz);
                 }
+
+                if (m_hotbarSlot >= 0 &&
+                    m_hotbarSlot < static_cast<int>(m_inventoryItems.size()))
+                {
+                    SendInventorySlotUpdate(m_hotbarSlot);
+                }
+
+                SendPacket(PacketHandler::WriteContainerSetSlot(-1, -1, m_carriedItem));
             };
 
-            auto recomputeMinimalRedstoneAround = [&](int x, int y, int z)
+            auto findNearbyWorkbench = [&](int centerX, int centerY, int centerZ, int& outX, int& outY, int& outZ)
             {
-                RefreshMinimalRedstoneAround(
-                    m_world,
-                    x, y, z,
-                    [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
-                    {
-                        if (onBlockUpdate)
-                            onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
-                    },
-                    [this](int dustX, int dustY, int dustZ, int oldData, int newData)
-                    {
-                        if (onBlockUpdate)
-                            onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, oldData);
-                    },
-                    [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
-                    {
-                        m_pendingDiodeTransitions.erase(
-                            std::remove_if(
-                                m_pendingDiodeTransitions.begin(),
-                                m_pendingDiodeTransitions.end(),
-                                [&](const PendingDiodeTransition& pending)
-                                {
-                                    return pending.x == dx && pending.y == dy && pending.z == dz;
-                                }),
-                            m_pendingDiodeTransitions.end());
+                static const int kOffsets[7][3] =
+                {
+                    { 0,  0,  0 },
+                    { 0, -1,  0 },
+                    { 0,  1,  0 },
+                    { 0,  0, -1 },
+                    { 0,  0,  1 },
+                    {-1,  0,  0 },
+                    { 1,  0,  0 }
+                };
 
-                        PendingDiodeTransition pending;
-                        pending.x = dx;
-                        pending.y = dy;
-                        pending.z = dz;
-                        pending.expectedBlockId = expectedBlockId;
-                        pending.targetBlockId = targetBlockId;
-                        pending.blockData = blockData;
-                        pending.ticksRemaining = delayTicks;
-                        m_pendingDiodeTransitions.push_back(pending);
-                    });
+                int blockId = 0;
+                int blockData = 0;
+                for (const auto& offset : kOffsets)
+                {
+                    const int testX = centerX + offset[0];
+                    const int testY = centerY + offset[1];
+                    const int testZ = centerZ + offset[2];
+                    if (TryGetWorldBlock(m_world, testX, testY, testZ, blockId, blockData) && blockId == 58)
+                    {
+                        outX = testX;
+                        outY = testY;
+                        outZ = testZ;
+                        return true;
+                    }
+                }
+                return false;
             };
 
             auto clearPendingDiodeTransition = [&](int x, int y, int z)
@@ -1883,6 +1849,22 @@ namespace LCEServer
             int clickedBlockIdForLog = 0;
             int clickedBlockDataForLog = 0;
             TryGetWorldBlock(m_world, use.x, use.y, use.z, clickedBlockIdForLog, clickedBlockDataForLog);
+            int predictedX = use.x;
+            int predictedY = use.y;
+            int predictedZ = use.z;
+            const bool resolvedPredictedTarget = TryResolvePredictedPlacementTarget(
+                m_world, use.x, use.y, use.z, use.face, predictedX, predictedY, predictedZ);
+            int nearbyTargetWorkbenchX = 0;
+            int nearbyTargetWorkbenchY = 0;
+            int nearbyTargetWorkbenchZ = 0;
+            const bool hasNearbyTargetWorkbench = findNearbyWorkbench(
+                use.x, use.y, use.z, nearbyTargetWorkbenchX, nearbyTargetWorkbenchY, nearbyTargetWorkbenchZ);
+            int nearbyPredictedWorkbenchX = 0;
+            int nearbyPredictedWorkbenchY = 0;
+            int nearbyPredictedWorkbenchZ = 0;
+            const bool hasNearbyPredictedWorkbench = findNearbyWorkbench(
+                predictedX, predictedY, predictedZ,
+                nearbyPredictedWorkbenchX, nearbyPredictedWorkbenchY, nearbyPredictedWorkbenchZ);
             int workbenchX = use.x;
             int workbenchY = use.y;
             int workbenchZ = use.z;
@@ -1895,14 +1877,17 @@ namespace LCEServer
                     workbenchX,
                     workbenchY,
                     workbenchZ);
-            if (clickedBlockIdForLog == 58 || resolvedWorkbench)
+            const bool allowTileUse = (!m_isSneaking || use.itemId < 0);
+            if (clickedBlockIdForLog == 58 || resolvedWorkbench || hasNearbyTargetWorkbench || hasNearbyPredictedWorkbench)
             {
                 Logger::Info(
                     "WB-DBG",
-                    "'%ls' UseItem item=%d:%d target=(%d,%d,%d) face=%d click=(%.2f,%.2f,%.2f) clicked=%d:%d resolved=%d workbench=(%d,%d,%d)",
+                    "'%ls' UseItem item=%d:%d sneaking=%d allowTileUse=%d target=(%d,%d,%d) face=%d click=(%.2f,%.2f,%.2f) clicked=%d:%d predicted=%d (%d,%d,%d) targetWB=%d (%d,%d,%d) predictedWB=%d (%d,%d,%d) resolved=%d workbench=(%d,%d,%d)",
                     m_playerName.c_str(),
                     use.itemId,
                     use.itemDamage,
+                    m_isSneaking ? 1 : 0,
+                    allowTileUse ? 1 : 0,
                     use.x,
                     use.y,
                     use.z,
@@ -1912,18 +1897,32 @@ namespace LCEServer
                     use.clickZ,
                     clickedBlockIdForLog,
                     clickedBlockDataForLog,
+                    resolvedPredictedTarget ? 1 : 0,
+                    predictedX,
+                    predictedY,
+                    predictedZ,
+                    hasNearbyTargetWorkbench ? 1 : 0,
+                    nearbyTargetWorkbenchX,
+                    nearbyTargetWorkbenchY,
+                    nearbyTargetWorkbenchZ,
+                    hasNearbyPredictedWorkbench ? 1 : 0,
+                    nearbyPredictedWorkbenchX,
+                    nearbyPredictedWorkbenchY,
+                    nearbyPredictedWorkbenchZ,
                     resolvedWorkbench ? 1 : 0,
                     workbenchX,
                     workbenchY,
                     workbenchZ);
             }
-            if (resolvedWorkbench)
+            if (allowTileUse && resolvedWorkbench)
             {
+                OpenWorkbenchContainer(workbenchX, workbenchY, workbenchZ);
                 resyncPlacementPrediction();
-                if (m_openContainerType == ContainerType::Workbench)
-                    CloseContainerIfOpen();
                 return;
             }
+
+            if (m_openContainerId > 0)
+                CloseContainerIfOpen();
 
             if (clickedChunk && !clickedChunk->blocks.empty() &&
                 use.y >= 0 && use.y < LEGACY_WORLD_HEIGHT)
@@ -1942,16 +1941,16 @@ namespace LCEServer
                         clickedBlockData = (idx & 1) ? ((packed >> 4) & 0xF) : (packed & 0xF);
                     }
 
-                    if (clickedBlockId == 93 || clickedBlockId == 94)
+                    if (allowTileUse && (clickedBlockId == 93 || clickedBlockId == 94))
                     {
                         const int newBlockData = GetToggledRepeaterDelayData(clickedBlockData);
-                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
-                            onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData))
+                            NotifyBlockUpdate(use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
                         resyncPlacementPrediction();
                         return;
                     }
 
-                    if (clickedBlockId == 149 || clickedBlockId == 150)
+                    if (allowTileUse && (clickedBlockId == 149 || clickedBlockId == 150))
                     {
                         BlockInteraction::InteractionResult interaction;
                         if (!TryResolveComparatorToggle(m_world, use.x, use.y, use.z, clickedBlockData, interaction))
@@ -1964,36 +1963,35 @@ namespace LCEServer
 
                         if (m_world->SetBlock(use.x, use.y, use.z, interaction.blockId, interaction.blockData))
                         {
-                            if (onBlockUpdate)
-                                onBlockUpdate(this, use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
-                            recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                            NotifyBlockUpdate(use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
+                            RefreshRedstoneAround(use.x, use.y, use.z);
                         }
                         resyncPlacementPrediction();
                         return;
                     }
 
-                    if (clickedBlockId == 69)
+                    if (allowTileUse && clickedBlockId == 69)
                     {
                         const int newBlockData = GetToggledLeverData(clickedBlockData);
-                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData) && onBlockUpdate)
+                        if (m_world->SetBlock(use.x, use.y, use.z, clickedBlockId, newBlockData))
                         {
-                            onBlockUpdate(this, use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
-                            recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                            NotifyBlockUpdate(use.x, use.y, use.z, clickedBlockId, newBlockData, clickedBlockId, clickedBlockData);
+                            RefreshRedstoneAround(use.x, use.y, use.z);
                         }
                         resyncPlacementPrediction();
                         return;
                     }
 
-                    if (clickedBlockId == 77 || clickedBlockId == 143)
+                    if (allowTileUse && (clickedBlockId == 77 || clickedBlockId == 143))
                     {
                         BlockInteraction::InteractionResult interaction;
                         int releaseTicks = 0;
                         if (TryResolveButtonPress(clickedBlockId, clickedBlockData, interaction, releaseTicks))
                         {
-                            if (m_world->SetBlock(use.x, use.y, use.z, interaction.blockId, interaction.blockData) && onBlockUpdate)
+                            if (m_world->SetBlock(use.x, use.y, use.z, interaction.blockId, interaction.blockData))
                             {
-                                onBlockUpdate(this, use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
-                                recomputeMinimalRedstoneAround(use.x, use.y, use.z);
+                                NotifyBlockUpdate(use.x, use.y, use.z, interaction.blockId, interaction.blockData, clickedBlockId, clickedBlockData);
+                                RefreshRedstoneAround(use.x, use.y, use.z);
                             }
 
                             m_pendingButtonReleases.erase(
@@ -2104,8 +2102,7 @@ namespace LCEServer
 
         auto notifyBlockPlaced = [&](int x, int y, int z, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
         {
-            if (onBlockUpdate)
-                onBlockUpdate(this, x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
+            NotifyBlockUpdate(x, y, z, newBlockId, newBlockData, oldBlockId, oldBlockData);
         };
 
         const int clickedBlockIdForPlacement = GetWorldBlockId(m_world, use.x, use.y, use.z);
@@ -2314,44 +2311,8 @@ namespace LCEServer
             SendInventorySlotUpdate(m_hotbarSlot);
         }
 
-        if (onBlockUpdate)
-            onBlockUpdate(this, px, py, pz, placedBlockId, placedBlockData, oldBlockId, oldBlockData);
-
-        RefreshMinimalRedstoneAround(
-            m_world,
-            px, py, pz,
-            [this](int blockX, int blockY, int blockZ, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData)
-            {
-                if (onBlockUpdate)
-                    onBlockUpdate(this, blockX, blockY, blockZ, newBlockId, newBlockData, oldBlockId, oldBlockData);
-            },
-            [this](int dustX, int dustY, int dustZ, int previousData, int newData)
-            {
-                if (onBlockUpdate)
-                    onBlockUpdate(this, dustX, dustY, dustZ, 55, newData, 55, previousData);
-            },
-            [this](int dx, int dy, int dz, int expectedBlockId, int targetBlockId, int blockData, int delayTicks)
-            {
-                m_pendingDiodeTransitions.erase(
-                    std::remove_if(
-                        m_pendingDiodeTransitions.begin(),
-                        m_pendingDiodeTransitions.end(),
-                        [&](const PendingDiodeTransition& pending)
-                        {
-                            return pending.x == dx && pending.y == dy && pending.z == dz;
-                        }),
-                    m_pendingDiodeTransitions.end());
-
-                PendingDiodeTransition pending;
-                pending.x = dx;
-                pending.y = dy;
-                pending.z = dz;
-                pending.expectedBlockId = expectedBlockId;
-                pending.targetBlockId = targetBlockId;
-                pending.blockData = blockData;
-                pending.ticksRemaining = delayTicks;
-                m_pendingDiodeTransitions.push_back(pending);
-            });
+        NotifyBlockUpdate(px, py, pz, placedBlockId, placedBlockData, oldBlockId, oldBlockData);
+        RefreshRedstoneAround(px, py, pz);
     }
 
     // ---------------------------------------------------------------
@@ -2823,7 +2784,27 @@ namespace LCEServer
     void Connection::HandlePlayerCommand(const uint8_t* data, int size)
     {
         // Silently accepted — sneak/sprint state tracking added in P2
-        (void)data; (void)size;
+        PacketHandler::PlayerCommandData cmd;
+        if (!PacketHandler::ReadPlayerCommand(data, size, cmd))
+            return;
+
+        switch (cmd.action)
+        {
+        case 1:
+            m_isSneaking = true;
+            break;
+        case 2:
+            m_isSneaking = false;
+            break;
+        case 4:
+            m_isSprinting = true;
+            break;
+        case 5:
+            m_isSprinting = false;
+            break;
+        default:
+            break;
+        }
     }
 
     // ---------------------------------------------------------------

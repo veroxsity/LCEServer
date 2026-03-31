@@ -1,16 +1,38 @@
 // LCEServer — TCP layer implementation
 // Closely follows WinsockNetLayer from the LCE source
 #include "TcpLayer.h"
+#include <algorithm>
+#include <memory>
 
 namespace LCEServer
 {
+    namespace
+    {
+        struct RecvThreadStart
+        {
+            TcpLayer* self = nullptr;
+            SOCKET socket = INVALID_SOCKET;
+            uint8_t smallId = 0;
+        };
+
+        void CloseSocketQuietly(SOCKET& sock)
+        {
+            if (sock == INVALID_SOCKET)
+                return;
+
+            shutdown(sock, SD_BOTH);
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+        }
+    }
+
     // Helper: receive exactly len bytes
     static bool RecvExact(SOCKET sock, uint8_t* buf, int len)
     {
         int total = 0;
         while (total < len)
         {
-            int r = recv(sock, (char*)buf + total, len - total, 0);
+            int r = recv(sock, reinterpret_cast<char*>(buf) + total, len - total, 0);
             if (r <= 0) return false;
             total += r;
         }
@@ -40,11 +62,11 @@ namespace LCEServer
         InitializeCriticalSection(&m_freeSmallIdLock);
         InitializeCriticalSection(&m_smallIdToSocketLock);
         InitializeCriticalSection(&m_sendLock);
-        InitializeCriticalSection(&m_disconnectLock);
         InitializeCriticalSection(&m_ipCacheLock);
 
-        for (int i = 0; i < 256; i++)
-            m_smallIdToSocket[i] = INVALID_SOCKET;
+        m_smallIdToSocket.fill(INVALID_SOCKET);
+        for (auto& ip : m_ipCache)
+            ip.clear();
 
         m_initialized = true;
         return true;
@@ -56,8 +78,7 @@ namespace LCEServer
 
         if (m_listenSocket != INVALID_SOCKET)
         {
-            closesocket(m_listenSocket);
-            m_listenSocket = INVALID_SOCKET;
+            CloseSocketQuietly(m_listenSocket);
         }
 
         if (m_acceptThread != NULL)
@@ -73,11 +94,7 @@ namespace LCEServer
         for (auto& c : m_connections)
         {
             c.active = false;
-            if (c.socket != INVALID_SOCKET)
-            {
-                closesocket(c.socket);
-                c.socket = INVALID_SOCKET;
-            }
+            CloseSocketQuietly(c.socket);
             if (c.recvThread != NULL)
             {
                 recvThreads.push_back(c.recvThread);
@@ -86,6 +103,15 @@ namespace LCEServer
         }
         m_connections.clear();
         LeaveCriticalSection(&m_connectionsLock);
+
+        EnterCriticalSection(&m_smallIdToSocketLock);
+        m_smallIdToSocket.fill(INVALID_SOCKET);
+        LeaveCriticalSection(&m_smallIdToSocketLock);
+
+        EnterCriticalSection(&m_ipCacheLock);
+        for (auto& ip : m_ipCache)
+            ip.clear();
+        LeaveCriticalSection(&m_ipCacheLock);
 
         for (auto h : recvThreads)
         {
@@ -99,7 +125,6 @@ namespace LCEServer
             DeleteCriticalSection(&m_freeSmallIdLock);
             DeleteCriticalSection(&m_smallIdToSocketLock);
             DeleteCriticalSection(&m_sendLock);
-            DeleteCriticalSection(&m_disconnectLock);
             DeleteCriticalSection(&m_ipCacheLock);
             WSACleanup();
             m_initialized = false;
@@ -121,9 +146,13 @@ namespace LCEServer
         LeaveCriticalSection(&m_freeSmallIdLock);
 
         EnterCriticalSection(&m_smallIdToSocketLock);
-        for (int i = 0; i < 256; i++)
-            m_smallIdToSocket[i] = INVALID_SOCKET;
+        m_smallIdToSocket.fill(INVALID_SOCKET);
         LeaveCriticalSection(&m_smallIdToSocketLock);
+
+        EnterCriticalSection(&m_ipCacheLock);
+        for (auto& ip : m_ipCache)
+            ip.clear();
+        LeaveCriticalSection(&m_ipCacheLock);
 
         struct addrinfo hints = {};
         struct addrinfo* result = NULL;
@@ -133,11 +162,11 @@ namespace LCEServer
         hints.ai_flags = (bindIp == nullptr || bindIp[0] == 0)
                          ? AI_PASSIVE : 0;
 
-        char portStr[16];
-        sprintf_s(portStr, "%d", port);
+        std::array<char, 16> portStr{};
+        sprintf_s(portStr.data(), portStr.size(), "%d", port);
         const char* resolvedIp = (bindIp && bindIp[0]) ? bindIp : NULL;
 
-        int iResult = getaddrinfo(resolvedIp, portStr, &hints, &result);
+        int iResult = getaddrinfo(resolvedIp, portStr.data(), &hints, &result);
         if (iResult != 0)
         {
             Logger::Error("TCP", "getaddrinfo failed for %s:%d - %d",
@@ -156,18 +185,22 @@ namespace LCEServer
         }
 
         int opt = 1;
-        setsockopt(m_listenSocket, SOL_SOCKET, SO_REUSEADDR,
-                   (const char*)&opt, sizeof(opt));
+        if (setsockopt(m_listenSocket, SOL_SOCKET, SO_REUSEADDR,
+                       reinterpret_cast<const char*>(&opt),
+                       sizeof(opt)) == SOCKET_ERROR)
+        {
+            Logger::Warn("TCP", "setsockopt(SO_REUSEADDR) failed: %d",
+                WSAGetLastError());
+        }
 
         iResult = ::bind(m_listenSocket, result->ai_addr,
-                         (int)result->ai_addrlen);
+                         static_cast<int>(result->ai_addrlen));
         freeaddrinfo(result);
 
         if (iResult == SOCKET_ERROR)
         {
             Logger::Error("TCP", "bind() failed: %d", WSAGetLastError());
-            closesocket(m_listenSocket);
-            m_listenSocket = INVALID_SOCKET;
+            CloseSocketQuietly(m_listenSocket);
             return false;
         }
 
@@ -175,14 +208,21 @@ namespace LCEServer
         if (iResult == SOCKET_ERROR)
         {
             Logger::Error("TCP", "listen() failed: %d", WSAGetLastError());
-            closesocket(m_listenSocket);
-            m_listenSocket = INVALID_SOCKET;
+            CloseSocketQuietly(m_listenSocket);
             return false;
         }
 
         m_active = true;
         m_acceptThread = CreateThread(NULL, 0, AcceptThreadProc,
                                       this, 0, NULL);
+        if (m_acceptThread == NULL)
+        {
+            Logger::Error("TCP", "CreateThread(accept) failed: %d",
+                GetLastError());
+            m_active = false;
+            CloseSocketQuietly(m_listenSocket);
+            return false;
+        }
 
         Logger::Info("TCP", "Listening on %s:%d",
             resolvedIp ? resolvedIp : "*", port);
@@ -194,16 +234,16 @@ namespace LCEServer
         if (sock == INVALID_SOCKET || dataSize <= 0) return false;
 
         // 4-byte big-endian length header (matches WinsockNetLayer) (matches WinsockNetLayer)
-        uint8_t header[4];
-        header[0] = (uint8_t)((dataSize >> 24) & 0xFF);
-        header[1] = (uint8_t)((dataSize >> 16) & 0xFF);
-        header[2] = (uint8_t)((dataSize >> 8) & 0xFF);
-        header[3] = (uint8_t)(dataSize & 0xFF);
+        std::array<uint8_t, 4> header{};
+        header[0] = static_cast<uint8_t>((dataSize >> 24) & 0xFF);
+        header[1] = static_cast<uint8_t>((dataSize >> 16) & 0xFF);
+        header[2] = static_cast<uint8_t>((dataSize >> 8) & 0xFF);
+        header[3] = static_cast<uint8_t>(dataSize & 0xFF);
 
         int totalSent = 0;
         while (totalSent < 4)
         {
-            int s = send(sock, (const char*)header + totalSent,
+            int s = send(sock, reinterpret_cast<const char*>(header.data()) + totalSent,
                          4 - totalSent, 0);
             if (s == SOCKET_ERROR || s == 0) return false;
             totalSent += s;
@@ -212,7 +252,7 @@ namespace LCEServer
         totalSent = 0;
         while (totalSent < dataSize)
         {
-            int s = send(sock, (const char*)data + totalSent,
+            int s = send(sock, static_cast<const char*>(data) + totalSent,
                          dataSize - totalSent, 0);
             if (s == SOCKET_ERROR || s == 0) return false;
             totalSent += s;
@@ -237,15 +277,20 @@ namespace LCEServer
     {
         // Matches WinsockNetLayer: 0xFF sentinel + packet id 255 +
         // 4-byte big-endian reason
-        uint8_t buf[6];
+        std::array<uint8_t, 6> buf{};
         buf[0] = SMALLID_REJECT;
         buf[1] = 255; // DisconnectPacket id
-        int r = (int)reason;
-        buf[2] = (uint8_t)((r >> 24) & 0xFF);
-        buf[3] = (uint8_t)((r >> 16) & 0xFF);
-        buf[4] = (uint8_t)((r >> 8) & 0xFF);
-        buf[5] = (uint8_t)(r & 0xFF);
-        send(sock, (const char*)buf, sizeof(buf), 0);
+        int r = static_cast<int>(reason);
+        buf[2] = static_cast<uint8_t>((r >> 24) & 0xFF);
+        buf[3] = static_cast<uint8_t>((r >> 16) & 0xFF);
+        buf[4] = static_cast<uint8_t>((r >> 8) & 0xFF);
+        buf[5] = static_cast<uint8_t>(r & 0xFF);
+        if (send(sock, reinterpret_cast<const char*>(buf.data()),
+                 static_cast<int>(buf.size()), 0) == SOCKET_ERROR)
+        {
+            Logger::Warn("TCP", "Failed to send reject packet: %d",
+                WSAGetLastError());
+        }
     }
 
     SOCKET TcpLayer::GetSocketForSmallId(uint8_t smallId)
@@ -264,43 +309,101 @@ namespace LCEServer
         return ip;
     }
 
+    TcpConnection* TcpLayer::FindConnectionLocked(uint8_t smallId)
+    {
+        for (auto& connection : m_connections)
+        {
+            if (connection.smallId == smallId)
+                return &connection;
+        }
+        return nullptr;
+    }
+
+    void TcpLayer::ClearConnectionCaches(uint8_t smallId)
+    {
+        EnterCriticalSection(&m_smallIdToSocketLock);
+        m_smallIdToSocket[smallId] = INVALID_SOCKET;
+        LeaveCriticalSection(&m_smallIdToSocketLock);
+
+        EnterCriticalSection(&m_ipCacheLock);
+        m_ipCache[smallId].clear();
+        LeaveCriticalSection(&m_ipCacheLock);
+    }
+
     void TcpLayer::CloseConnection(uint8_t smallId)
     {
         EnterCriticalSection(&m_connectionsLock);
-        for (auto& c : m_connections)
+        if (auto* connection = FindConnectionLocked(smallId))
         {
-            if (c.smallId == smallId && c.active &&
-                c.socket != INVALID_SOCKET)
-            {
-                closesocket(c.socket);
-                c.socket = INVALID_SOCKET;
-                break;
-            }
+            connection->active = false;
+            CloseSocketQuietly(connection->socket);
         }
         LeaveCriticalSection(&m_connectionsLock);
     }
 
     void TcpLayer::PushFreeSmallId(uint8_t smallId)
     {
+        HANDLE recvThread = NULL;
+        EnterCriticalSection(&m_connectionsLock);
+        if (auto* connection = FindConnectionLocked(smallId))
+            recvThread = connection->recvThread;
+        LeaveCriticalSection(&m_connectionsLock);
+
+        if (recvThread != NULL)
+        {
+            DWORD waitResult = WaitForSingleObject(recvThread, 2000);
+            if (waitResult == WAIT_TIMEOUT)
+            {
+                Logger::Warn("TCP",
+                    "Timed out waiting for recv thread on smallId=%d; not recycling id yet",
+                    smallId);
+                return;
+            }
+            if (waitResult == WAIT_FAILED)
+            {
+                Logger::Warn("TCP",
+                    "WaitForSingleObject failed for smallId=%d: %d",
+                    smallId, GetLastError());
+                return;
+            }
+        }
+
+        EnterCriticalSection(&m_connectionsLock);
+        for (auto& connection : m_connections)
+        {
+            if (connection.smallId != smallId)
+                continue;
+
+            if (connection.recvThread != NULL)
+            {
+                CloseHandle(connection.recvThread);
+                connection.recvThread = NULL;
+            }
+            break;
+        }
+        m_connections.erase(
+            std::remove_if(m_connections.begin(), m_connections.end(),
+                [smallId](const TcpConnection& connection) {
+                    return connection.smallId == smallId;
+                }),
+            m_connections.end());
+        LeaveCriticalSection(&m_connectionsLock);
+
+        ClearConnectionCaches(smallId);
+
         EnterCriticalSection(&m_freeSmallIdLock);
-        m_freeSmallIds.push_back(smallId);
+        if (std::find(m_freeSmallIds.begin(), m_freeSmallIds.end(), smallId)
+            == m_freeSmallIds.end())
+        {
+            m_freeSmallIds.push_back(smallId);
+        }
         LeaveCriticalSection(&m_freeSmallIdLock);
-
-        // Clear the socket mapping
-        EnterCriticalSection(&m_smallIdToSocketLock);
-        m_smallIdToSocket[smallId] = INVALID_SOCKET;
-        LeaveCriticalSection(&m_smallIdToSocketLock);
-
-        // Clear IP cache
-        EnterCriticalSection(&m_ipCacheLock);
-        m_ipCache[smallId].clear();
-        LeaveCriticalSection(&m_ipCacheLock);
     }
 
     // Accept loop — mirrors WinsockNetLayer::AcceptThreadProc
     DWORD WINAPI TcpLayer::AcceptThreadProc(LPVOID param)
     {
-        TcpLayer* self = (TcpLayer*)param;
+        TcpLayer* self = static_cast<TcpLayer*>(param);
 
         while (self->m_active)
         {
@@ -308,7 +411,7 @@ namespace LCEServer
             ZeroMemory(&remoteAddr, sizeof(remoteAddr));
             int addrLen = sizeof(remoteAddr);
             SOCKET clientSock = accept(self->m_listenSocket,
-                (sockaddr*)&remoteAddr, &addrLen);
+                reinterpret_cast<sockaddr*>(&remoteAddr), &addrLen);
 
             if (clientSock == INVALID_SOCKET)
             {
@@ -319,31 +422,38 @@ namespace LCEServer
             }
 
             int noDelay = 1;
-            setsockopt(clientSock, IPPROTO_TCP, TCP_NODELAY,
-                       (const char*)&noDelay, sizeof(noDelay));
+            if (setsockopt(clientSock, IPPROTO_TCP, TCP_NODELAY,
+                           reinterpret_cast<const char*>(&noDelay),
+                           sizeof(noDelay)) == SOCKET_ERROR)
+            {
+                Logger::Warn("TCP",
+                    "setsockopt(TCP_NODELAY) failed: %d",
+                    WSAGetLastError());
+            }
 
             // Resolve remote IP
-            char ipBuf[64] = {};
-            inet_ntop(AF_INET, &remoteAddr.sin_addr, ipBuf, sizeof(ipBuf));
-            std::string remoteIp = ipBuf;
+            std::array<char, 64> ipBuf{};
+            const char* resolvedRemoteIp = inet_ntop(AF_INET, &remoteAddr.sin_addr,
+                ipBuf.data(), static_cast<DWORD>(ipBuf.size()));
+            std::string remoteIp = resolvedRemoteIp ? resolvedRemoteIp : "<unknown>";
 
-            Logger::Debug("TCP", "Incoming connection from %s", ipBuf);
+            Logger::Debug("TCP", "Incoming connection from %s", remoteIp.c_str());
 
             // IP ban check
             if (self->m_ipBanCheck && self->m_ipBanCheck(remoteIp))
             {
-                Logger::Info("TCP", "Rejected %s: IP banned", ipBuf);
+                Logger::Info("TCP", "Rejected %s: IP banned", remoteIp.c_str());
                 SendReject(clientSock, DisconnectReason::Banned);
-                closesocket(clientSock);
+                CloseSocketQuietly(clientSock);
                 continue;
             }
 
             // Server full check
             if (self->m_canAcceptCheck && !self->m_canAcceptCheck())
             {
-                Logger::Info("TCP", "Rejected %s: server full", ipBuf);
+                Logger::Info("TCP", "Rejected %s: server full", remoteIp.c_str());
                 SendReject(clientSock, DisconnectReason::ServerFull);
-                closesocket(clientSock);
+                CloseSocketQuietly(clientSock);
                 continue;
             }
 
@@ -355,27 +465,37 @@ namespace LCEServer
                 assignedId = self->m_freeSmallIds.back();
                 self->m_freeSmallIds.pop_back();
             }
-            else if (self->m_nextSmallId < (unsigned)MAX_PLAYERS_HARD)
+            else if (self->m_nextSmallId < static_cast<unsigned>(MAX_PLAYERS_HARD))
             {
-                assignedId = (uint8_t)self->m_nextSmallId++;
+                assignedId = static_cast<uint8_t>(self->m_nextSmallId++);
             }
             else
             {
                 LeaveCriticalSection(&self->m_freeSmallIdLock);
-                Logger::Info("TCP", "Rejected %s: no smallIds", ipBuf);
+                Logger::Info("TCP", "Rejected %s: no smallIds", remoteIp.c_str());
                 SendReject(clientSock, DisconnectReason::ServerFull);
-                closesocket(clientSock);
+                CloseSocketQuietly(clientSock);
                 continue;
             }
             LeaveCriticalSection(&self->m_freeSmallIdLock);
 
             // Send the assigned smallId (1 byte) — client expects this
-            uint8_t assignBuf[1] = { assignedId };
-            int sent = send(clientSock, (const char*)assignBuf, 1, 0);
+            std::array<uint8_t, 1> assignBuf{ assignedId };
+            int sent = send(clientSock,
+                            reinterpret_cast<const char*>(assignBuf.data()),
+                            static_cast<int>(assignBuf.size()), 0);
             if (sent != 1)
             {
-                Logger::Warn("TCP", "Failed to send smallId to %s", ipBuf);
-                closesocket(clientSock);
+                Logger::Warn("TCP", "Failed to send smallId to %s", remoteIp.c_str());
+                CloseSocketQuietly(clientSock);
+
+                EnterCriticalSection(&self->m_freeSmallIdLock);
+                if (std::find(self->m_freeSmallIds.begin(), self->m_freeSmallIds.end(), assignedId)
+                    == self->m_freeSmallIds.end())
+                {
+                    self->m_freeSmallIds.push_back(assignedId);
+                }
+                LeaveCriticalSection(&self->m_freeSmallIdLock);
                 continue;
             }
 
@@ -389,7 +509,6 @@ namespace LCEServer
 
             EnterCriticalSection(&self->m_connectionsLock);
             self->m_connections.push_back(conn);
-            int connIdx = (int)self->m_connections.size() - 1;
             LeaveCriticalSection(&self->m_connectionsLock);
 
             // Register in lookup tables
@@ -402,17 +521,50 @@ namespace LCEServer
             LeaveCriticalSection(&self->m_ipCacheLock);
 
             Logger::Info("TCP", "Accepted %s -> smallId=%d",
-                         ipBuf, assignedId);
+                         remoteIp.c_str(), assignedId);
 
             // Spawn recv thread — pass connIdx + self pointer
-            struct RecvParam { TcpLayer* self; int idx; };
-            RecvParam* rp = new RecvParam{ self, connIdx };
+            auto recvParam = std::make_unique<RecvThreadStart>();
+            recvParam->self = self;
+            recvParam->socket = clientSock;
+            recvParam->smallId = assignedId;
+
             HANDLE hThread = CreateThread(NULL, 0, RecvThreadProc,
-                                          rp, 0, NULL);
+                                          recvParam.get(), 0, NULL);
+            if (hThread == NULL)
+            {
+                Logger::Error("TCP",
+                    "CreateThread(recv) failed for smallId=%d: %d",
+                    assignedId, GetLastError());
+
+                CloseSocketQuietly(clientSock);
+
+                EnterCriticalSection(&self->m_connectionsLock);
+                self->m_connections.erase(
+                    std::remove_if(self->m_connections.begin(), self->m_connections.end(),
+                        [assignedId](const TcpConnection& connection) {
+                            return connection.smallId == assignedId;
+                        }),
+                    self->m_connections.end());
+                LeaveCriticalSection(&self->m_connectionsLock);
+
+                self->ClearConnectionCaches(assignedId);
+
+                EnterCriticalSection(&self->m_freeSmallIdLock);
+                if (std::find(self->m_freeSmallIds.begin(), self->m_freeSmallIds.end(), assignedId)
+                    == self->m_freeSmallIds.end())
+                {
+                    self->m_freeSmallIds.push_back(assignedId);
+                }
+                LeaveCriticalSection(&self->m_freeSmallIdLock);
+                continue;
+            }
+
+            recvParam.release();
 
             EnterCriticalSection(&self->m_connectionsLock);
-            if (connIdx < (int)self->m_connections.size())
-                self->m_connections[connIdx].recvThread = hThread;
+            if (auto* connection = self->FindConnectionLocked(assignedId))
+                connection->recvThread = hThread;
             LeaveCriticalSection(&self->m_connectionsLock);
         }
         return 0;
@@ -421,39 +573,32 @@ namespace LCEServer
     // Per-connection receive loop — mirrors WinsockNetLayer::RecvThreadProc
     DWORD WINAPI TcpLayer::RecvThreadProc(LPVOID param)
     {
-        struct RecvParam { TcpLayer* self; int idx; };
-        RecvParam rp = *(RecvParam*)param;
-        delete (RecvParam*)param;
-
-        TcpLayer* self = rp.self;
-
-        EnterCriticalSection(&self->m_connectionsLock);
-        if (rp.idx >= (int)self->m_connections.size())
-        {
-            LeaveCriticalSection(&self->m_connectionsLock);
+        std::unique_ptr<RecvThreadStart> start(
+            static_cast<RecvThreadStart*>(param));
+        if (!start || start->self == nullptr)
             return 0;
-        }
-        SOCKET sock = self->m_connections[rp.idx].socket;
-        uint8_t clientSmallId = self->m_connections[rp.idx].smallId;
-        LeaveCriticalSection(&self->m_connectionsLock);
+
+        TcpLayer* self = start->self;
+        SOCKET sock = start->socket;
+        uint8_t clientSmallId = start->smallId;
 
         std::vector<uint8_t> recvBuf(RECV_BUFFER_SIZE);
 
         while (self->m_active)
         {
             // Read 4-byte big-endian length header
-            uint8_t header[4];
-            if (!RecvExact(sock, header, 4))
+            std::array<uint8_t, 4> header{};
+            if (!RecvExact(sock, header.data(), static_cast<int>(header.size())))
             {
                 Logger::Debug("TCP", "Client smallId=%d disconnected (header)",
                               clientSmallId);
                 break;
             }
 
-            int packetSize = ((uint32_t)header[0] << 24) |
-                             ((uint32_t)header[1] << 16) |
-                             ((uint32_t)header[2] << 8) |
-                             ((uint32_t)header[3]);
+            int packetSize = (static_cast<int>(header[0]) << 24) |
+                             (static_cast<int>(header[1]) << 16) |
+                             (static_cast<int>(header[2]) << 8) |
+                             static_cast<int>(header[3]);
 
             if (packetSize <= 0 || packetSize > MAX_PACKET_SIZE)
             {
@@ -462,7 +607,7 @@ namespace LCEServer
                 break;
             }
 
-            if ((int)recvBuf.size() < packetSize)
+            if (static_cast<int>(recvBuf.size()) < packetSize)
                 recvBuf.resize(packetSize);
 
             if (!RecvExact(sock, &recvBuf[0], packetSize))
@@ -479,17 +624,12 @@ namespace LCEServer
 
         // Mark disconnected
         EnterCriticalSection(&self->m_connectionsLock);
-        for (auto& c : self->m_connections)
+        if (auto* connection = self->FindConnectionLocked(clientSmallId))
         {
-            if (c.smallId == clientSmallId)
+            connection->active = false;
+            if (connection->socket == sock)
             {
-                c.active = false;
-                if (c.socket != INVALID_SOCKET)
-                {
-                    closesocket(c.socket);
-                    c.socket = INVALID_SOCKET;
-                }
-                break;
+                CloseSocketQuietly(connection->socket);
             }
         }
         LeaveCriticalSection(&self->m_connectionsLock);

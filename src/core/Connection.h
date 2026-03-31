@@ -200,6 +200,10 @@ namespace LCEServer
         void HandleRespawn(const uint8_t* data, int size);
         void HandleClientCommand(const uint8_t* data, int size);
         void SendActualTileState(int x, int y, int z);
+        void NotifyBlockUpdate(int x, int y, int z, int newBlockId, int newBlockData, int oldBlockId, int oldBlockData);
+        void ScheduleDiodeTransition(int x, int y, int z, int expectedBlockId, int targetBlockId, int blockData, int delayTicks);
+        void RefreshRedstoneAround(int x, int y, int z);
+        void CleanupUnsupportedBlocksAround(int x, int y, int z);
         void SendPreLoginResponse();
         void SendLoginResponse();
         void SendSpawnSequence();
@@ -240,6 +244,8 @@ namespace LCEServer
         // Player position (updated by MovePlayer packets)
         double              m_x = 0, m_y = 0, m_z = 0;
         float               m_yRot = 0, m_xRot = 0;
+        bool                m_isSneaking = false;
+        bool                m_isSprinting = false;
         int                 m_hotbarSlot = 0; // updated by SetCarriedItem C->S (id=16)
         std::array<ItemInstanceData, 36> m_inventoryItems = {};
         std::array<ItemInstanceData, 4>  m_armorItems = {};

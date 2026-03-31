@@ -114,42 +114,6 @@ namespace LCEServer::BlockInteraction
         if (TryGetWorldBlock(world, outX, outY, outZ, blockId, blockData) && blockId == 58)
             return true;
 
-        int foundX = 0;
-        int foundY = 0;
-        int foundZ = 0;
-        int matches = 0;
-        static const int kNeighborOffsets[6][3] =
-        {
-            { 0, -1,  0 },
-            { 0,  1,  0 },
-            { 0,  0, -1 },
-            { 0,  0,  1 },
-            {-1,  0,  0 },
-            { 1,  0,  0 }
-        };
-
-        for (const auto& offset : kNeighborOffsets)
-        {
-            const int neighborX = x + offset[0];
-            const int neighborY = y + offset[1];
-            const int neighborZ = z + offset[2];
-            if (TryGetWorldBlock(world, neighborX, neighborY, neighborZ, blockId, blockData) && blockId == 58)
-            {
-                foundX = neighborX;
-                foundY = neighborY;
-                foundZ = neighborZ;
-                ++matches;
-            }
-        }
-
-        if (matches == 1)
-        {
-            outX = foundX;
-            outY = foundY;
-            outZ = foundZ;
-            return true;
-        }
-
         return false;
     }
 

@@ -2,6 +2,9 @@
 #include "../access/JsonUtil.h"
 #include "EmbeddedRecipes.h"
 #include "Logger.h"
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
 
 namespace LCEServer
 {
@@ -20,19 +23,24 @@ namespace LCEServer
 
         bool ParseIntValue(const std::string& text, int& outValue)
         {
-            try
-            {
-                size_t parsed = 0;
-                int value = std::stoi(text, &parsed, 10);
-                if (parsed != text.size())
-                    return false;
-                outValue = value;
-                return true;
-            }
-            catch (...)
+            const std::string trimmed = TrimCopy(text);
+            if (trimmed.empty())
+                return false;
+
+            const char* begin = trimmed.c_str();
+            char* end = nullptr;
+            errno = 0;
+            const long parsed = std::strtol(begin, &end, 10);
+            if (begin == end || *end != '\0' || errno == ERANGE)
+                return false;
+            if (parsed < (std::numeric_limits<int>::min)() ||
+                parsed > (std::numeric_limits<int>::max)())
             {
                 return false;
             }
+
+            outValue = static_cast<int>(parsed);
+            return true;
         }
 
         bool ParseItemToken(const std::string& token, ItemInstanceData& outItem)
@@ -168,6 +176,13 @@ namespace LCEServer
                     !ParseIngredientsField(ingredientsIt->second, recipe.ingredients))
                 {
                     Logger::Error("Crafting", "Invalid embedded recipe payload for recipe=%d", recipeIndex);
+                    g_recipeLoadFailed = true;
+                    return false;
+                }
+
+                if (loadedRecipes.find(recipeIndex) != loadedRecipes.end())
+                {
+                    Logger::Error("Crafting", "Duplicate embedded recipe index=%d", recipeIndex);
                     g_recipeLoadFailed = true;
                     return false;
                 }

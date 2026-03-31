@@ -341,6 +341,14 @@ namespace LCEServer
         static bool ReadUseItem(const uint8_t* data, int size,
                                 UseItemData& out);
 
+        struct PlayerCommandData {
+            int entityId = 0;
+            int action = 0;
+            int data = 0;
+        };
+        static bool ReadPlayerCommand(const uint8_t* data, int size,
+                                      PlayerCommandData& out);
+
         struct ContainerClickData {
             int8_t containerId = 0;
             int16_t slotNum = 0;

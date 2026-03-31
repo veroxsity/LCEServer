@@ -5,6 +5,7 @@
 #include "Types.h"
 #include "Protocol.h"
 #include "Logger.h"
+#include <array>
 #include <functional>
 
 namespace LCEServer
@@ -21,7 +22,7 @@ namespace LCEServer
         uint8_t     smallId     = 0;
         HANDLE      recvThread  = NULL;
         std::string remoteIp;
-        volatile bool active    = false;
+        bool        active      = false;
     };
 
     class TcpLayer
@@ -74,6 +75,8 @@ namespace LCEServer
     private:
         static DWORD WINAPI AcceptThreadProc(LPVOID param);
         static DWORD WINAPI RecvThreadProc(LPVOID param);
+        TcpConnection* FindConnectionLocked(uint8_t smallId);
+        void ClearConnectionCaches(uint8_t smallId);
 
         SOCKET              m_listenSocket = INVALID_SOCKET;
         HANDLE              m_acceptThread = NULL;
@@ -88,16 +91,13 @@ namespace LCEServer
         std::vector<uint8_t> m_freeSmallIds;
 
         CRITICAL_SECTION    m_smallIdToSocketLock;
-        SOCKET              m_smallIdToSocket[256];
+        std::array<SOCKET, 256> m_smallIdToSocket{};
 
         CRITICAL_SECTION    m_sendLock;
 
-        CRITICAL_SECTION    m_disconnectLock;
-        std::vector<uint8_t> m_disconnectedSmallIds;
-
         // Remote IP cache per smallId
         CRITICAL_SECTION    m_ipCacheLock;
-        std::string         m_ipCache[256];
+        std::array<std::string, 256> m_ipCache{};
 
         DataReceivedCallback m_dataCallback;
         DisconnectCallback   m_disconnectCallback;

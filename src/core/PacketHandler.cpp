@@ -845,15 +845,15 @@ namespace LCEServer
         out.x    = r.readInt();
         out.y    = (int)r.readByte();
         out.z    = r.readInt();
-        out.face = (int)(int8_t)r.readByte(); // signed: -1 = replace-in-place
-        // readItem: short id; if id >= 0, read byte count + short damage
-        int16_t itemId = r.readShort();
-        out.itemId = (int)itemId;
-        if (itemId >= 0)
-        {
-            out.itemCount  = (int)r.readByte();
-            out.itemDamage = (int)r.readUnsignedShort();
-        }
+        out.face = (int)r.readByte();
+        ItemInstanceData item;
+        if (!ReadItemInstance(r, item))
+            return false;
+
+        out.itemId = item.id;
+        out.itemCount = item.count;
+        out.itemDamage = item.aux;
+
         // click offsets scaled by 1/16
         if (r.hasRemaining(3))
         {
@@ -861,6 +861,19 @@ namespace LCEServer
             out.clickY = (float)r.readByte() / 16.0f;
             out.clickZ = (float)r.readByte() / 16.0f;
         }
+        return true;
+    }
+
+    bool PacketHandler::ReadPlayerCommand(const uint8_t* data, int size,
+                                          PlayerCommandData& out)
+    {
+        if (size < 1 + 4 + 1 + 4)
+            return false;
+
+        ByteReader r(data + 1, size - 1);
+        out.entityId = r.readInt();
+        out.action = static_cast<int>(r.readByte());
+        out.data = r.readInt();
         return true;
     }
 

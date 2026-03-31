@@ -201,7 +201,7 @@ namespace LCEServer::BlockPlacement
         outY = clickedY;
         outZ = clickedZ;
 
-        if (face == -1)
+        if (face == -1 || (face & 0xFF) == 255)
             return true;
 
         const int normalizedFace = face & 0xFF;
@@ -234,7 +234,7 @@ namespace LCEServer::BlockPlacement
         outY = clickedY;
         outZ = clickedZ;
 
-        if (face == -1)
+        if (face == -1 || (face & 0xFF) == 255)
             return true;
 
         const int normalizedFace = face & 0xFF;
